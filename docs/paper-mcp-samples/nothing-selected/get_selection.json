@@ -1,0 +1,12 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\n  \"file\": {\n    \"id\": \"01M3NSDXNCKM0QFAGTRH3BF0CC\",\n    \"name\": \"Audiol — iOS\"\n  },\n  \"contentHash\": {\n    \"tokens\": \"ea68418b\"\n  }\n}"
+    },
+    {
+      "type": "text",
+      "text": "{\n  \"selectedNodes\": [],\n  \"count\": 0\n}"
+    }
+  ]
+}
