@@ -2,7 +2,7 @@
 
 Paper Peek shows a Paper artboard beside your code.
 
-The bar widget is a dot on the left of the bar. The tooltip reads Live, Not live, or Off. Click the dot to open the drawer. Press `SUPER + SHIFT + H` to open it, and press that hotkey again to close it.
+The bar widget is a dot. The tooltip reads Live, Not live, or Off. Click the dot to open the drawer. Press `SUPER + SHIFT + H` to open it, and press that hotkey again to close it.
 
 The drawer slides in from the right. The header shows the project, the page, and the artboard. Float moves that artboard to a card in the bottom-right corner. Browse opens the project list. The corner card stays up when you change workspace.
 
