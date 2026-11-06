@@ -185,7 +185,6 @@ Item {
       parsed = null
     }
     if (name === "resolve") root.applyResolve(parsed)
-    else if (name === "project") root.applyProject(parsed)
     else if (name === "rows") root.applyRows(parsed)
     else if (name === "remember") root.applyRemember()
   }
@@ -194,11 +193,15 @@ Item {
     if (parsed && parsed.kind === "projects") {
       root.notice = typeof parsed.notice === "string" ? parsed.notice : ""
       root.view = "projects"
+      root.rows = []
+      root.cursor = 0
       root.startCommand(["browser", "projects"], "rows")
       return
     }
     if (!parsed && (root.fileId === "" || root.nodeId === "")) {
       root.view = "projects"
+      root.rows = []
+      root.cursor = 0
       root.startCommand(["browser", "projects"], "rows")
       return
     }
@@ -206,25 +209,6 @@ Item {
     root.notice = ""
     root.readCurrent()
     root.refreshShot()
-  }
-
-  function applyProject(parsed) {
-    if (!parsed || parsed.kind === "shot") {
-      root.view = "shot"
-      root.notice = ""
-      root.readCurrent()
-      root.refreshShot()
-      return
-    }
-    root.notice = typeof parsed.notice === "string" ? parsed.notice : ""
-    if (parsed.kind === "pages" && root.safeId(parsed.fileId) !== "") {
-      root.browseFileId = parsed.fileId
-      root.view = "pages"
-      root.startCommand(["browser", "pages", parsed.fileId], "rows")
-      return
-    }
-    root.view = "projects"
-    root.startCommand(["browser", "projects"], "rows")
   }
 
   function applyRows(parsed) {
@@ -243,6 +227,8 @@ Item {
   function showBrowser() {
     root.notice = ""
     root.view = "projects"
+    root.rows = []
+    root.cursor = 0
     root.startCommand(["browser", "projects"], "rows")
   }
 
@@ -270,11 +256,15 @@ Item {
   function back() {
     if (root.view === "artboards") {
       root.view = "pages"
+      root.rows = []
+      root.cursor = 0
       root.startCommand(["browser", "pages", root.browseFileId], "rows")
       return
     }
     if (root.view === "pages") {
       root.view = "projects"
+      root.rows = []
+      root.cursor = 0
       root.startCommand(["browser", "projects"], "rows")
       return
     }
@@ -316,7 +306,13 @@ Item {
     if (row.kind === "project") {
       root.browseFileId = row.fileId
       root.browseProjectName = row.label || ""
-      root.startCommand(["resolve-project", row.fileId], "project")
+      root.browsePageId = ""
+      root.browsePageName = ""
+      root.notice = ""
+      root.view = "pages"
+      root.rows = []
+      root.cursor = 0
+      root.startCommand(["browser", "pages", row.fileId], "rows")
       return
     }
     if (row.kind === "page") {
@@ -324,6 +320,8 @@ Item {
       root.browsePageId = row.pageId
       root.browsePageName = row.label || ""
       root.view = "artboards"
+      root.rows = []
+      root.cursor = 0
       root.startCommand(["browser", "artboards", row.fileId, row.pageId], "rows")
       return
     }
@@ -673,9 +671,16 @@ Item {
           contentWidth: width
           contentHeight: shot.height
           interactive: contentHeight > height
-          Keys.onEscapePressed: function(event) {
-            root.close("")
-            event.accepted = true
+          Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Escape) {
+              root.close("")
+              event.accepted = true
+              return
+            }
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+              root.showBrowser()
+              event.accepted = true
+            }
           }
 
           Image {

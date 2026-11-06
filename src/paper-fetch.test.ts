@@ -235,6 +235,13 @@ async function runTests(): Promise<void> {
       assert(!text.includes("get_screenshot"), `${path} does not name get_screenshot`)
       assert(!text.includes("get_basic_info"), `${path} does not name get_basic_info`)
     }
+    const drawer = await readFile(join(root, "Drawer.qml"), "utf8")
+    assert(!drawer.includes("resolve-project"), "browsing a project does not ask Paper to resolve it")
+    assert(
+      drawer.includes('["browser", "pages", row.fileId]'),
+      "picking a project lists that project's cached pages",
+    )
+    assert(drawer.includes("Qt.Key_Return"), "Enter on the shot opens the browser")
 
     const pageId = parsePageId("p-3-0")
     assert(pageId !== null, "page id parses")
@@ -739,11 +746,30 @@ async function memoryTests(): Promise<void> {
       fresh.stdout === '{"kind":"pages","fileId":"01M3OTHERFILE00000000000001","notice":""}\n',
       "a project with no memory opens its pages",
     )
-    const infoBeforePages = infoCalls
+    listCalls = 0
+    infoCalls = 0
     const pages = await capture(["browser", "pages", FILE], source)
-    assert(pages.code === 0 && infoCalls === infoBeforePages, "cached pages do not call Paper")
+    assert(pages.code === 0 && listCalls === 0 && infoCalls === 0, "a remembered project's cached pages do not call Paper")
     const pageRows = JSON.parse(pages.stdout) as { rows: { kind: string; label: string }[] }
     assert(pageRows.rows[0]?.kind === "page" && pageRows.rows[0]?.label === "Page 1", "cached pages keep Paper's names")
+    await writeFile(
+      join(cacheDir, "artboards", FILE, `${PAGE}.json`),
+      JSON.stringify({
+        fileId: FILE,
+        pageId: PAGE,
+        artboards: [
+          { id: NODE, name: "Tokens", width: 8 },
+          { id: "QPO-0", name: "Library", width: 12 },
+        ],
+      }),
+    )
+    const boards = await capture(["browser", "artboards", FILE, PAGE], source)
+    assert(boards.code === 0 && listCalls === 0 && infoCalls === 0, "cached artboards do not call Paper")
+    const boardRows = JSON.parse(boards.stdout) as { rows: { kind: string; label: string }[] }
+    assert(
+      boardRows.rows.map((row) => row.label).join(",") === "Tokens,Library",
+      "cached artboards keep Paper's order and names",
+    )
 
     await rm(statePath, { force: true })
     const empty = await capture(["resolve"], down)
