@@ -1,0 +1,275 @@
+#!/usr/bin/env bash
+# Read-only check and screenshot drive for the Paper Peek bar label.
+# Does not start, restart, enable, disable, or remove the shell or the plugin.
+set -euo pipefail
+
+plugin_id="fmchale.paper-peek"
+expected_label="Paper Peek"
+expected_section="left"
+plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/${plugin_id}"
+evidence_root="${XDG_STATE_HOME:-$HOME/.local/state}/paper-peek/verify-evidence"
+scratch_root="/tmp/paper-peek-verify"
+marker_name="owned-by-verify-paper-peek"
+
+die() {
+  echo "verify-paper-peek: $*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+usage: verify-paper-peek doctor
+       verify-paper-peek drive bar-label
+       verify-paper-peek cleanup
+EOF
+  exit 2
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
+}
+
+shell_socket() {
+  local socks=()
+  shopt -s nullglob
+  socks=(/run/user/"$(id -u)"/omarchy-shell-*.sock)
+  shopt -u nullglob
+  if ((${#socks[@]} != 1)); then
+    die "expected exactly one omarchy-shell socket, found ${#socks[@]}. Refusing to pick a shared or unknown shell."
+  fi
+  printf '%s\n' "${socks[0]}"
+}
+
+doctor() {
+  require_cmd omarchy-shell
+  require_cmd omarchy
+  require_cmd jq
+  require_cmd hyprctl
+  require_cmd grim
+  require_cmd tesseract
+
+  [[ -n ${WAYLAND_DISPLAY:-} ]] || die "WAYLAND_DISPLAY is unset. Refusing to guess a session."
+  local runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  local display_path="$WAYLAND_DISPLAY"
+  [[ $display_path == /* ]] || display_path="$runtime/$display_path"
+  [[ -S $display_path ]] || die "Wayland socket is missing: $display_path"
+
+  local socket
+  socket=$(shell_socket)
+
+  local ping
+  ping=$(omarchy-shell shell ping)
+  [[ $ping == ok ]] || die "omarchy-shell shell ping returned: ${ping:-<empty>}"
+
+  [[ -d $plugin_dir ]] || die "plugin directory is missing: $plugin_dir"
+  [[ ! -L $plugin_dir ]] || die "plugin directory is a symlink: $plugin_dir. Validate and drive the real directory only."
+  local real
+  real=$(readlink -f "$plugin_dir")
+  [[ $real == "$plugin_dir" ]] || die "plugin directory resolves to $real, expected $plugin_dir"
+
+  local manifest="$plugin_dir/manifest.json"
+  [[ -f $manifest ]] || die "missing manifest: $manifest"
+  local manifest_id manifest_version
+  manifest_id=$(jq -r '.id // ""' "$manifest")
+  manifest_version=$(jq -r '.version // ""' "$manifest")
+  [[ $manifest_id == "$plugin_id" ]] || die "manifest id is '$manifest_id', expected $plugin_id"
+
+  omarchy plugin validate "$plugin_dir" >/dev/null
+
+  local plugins entry
+  plugins=$(omarchy plugin list --json)
+  entry=$(jq -c --arg id "$plugin_id" '.[] | select(.id == $id)' <<<"$plugins")
+  [[ -n $entry ]] || die "plugin $plugin_id is not in omarchy plugin list. Do not enable it from verification."
+  [[ $(jq -r '.enabled' <<<"$entry") == true ]] || die "plugin $plugin_id is listed but not on the bar (enabled is false). Do not enable it from verification."
+  jq -e '(.kinds // []) | index("bar-widget") != null' <<<"$entry" >/dev/null \
+    || die "plugin $plugin_id is not a bar-widget"
+
+  local monitors monitor_count origin monitor_name scale
+  monitors=$(hyprctl monitors -j)
+  monitor_count=$(jq 'length' <<<"$monitors")
+  [[ $monitor_count == 1 ]] || die "expected one monitor so the bar crop stays on a known output, found $monitor_count"
+  origin=$(jq -r '.[0] | "\(.x) \(.y)"' <<<"$monitors")
+  [[ $origin == "0 0" ]] || die "monitor origin is $origin. The grim offset for a non-zero origin is unverified. Refusing to drive."
+  monitor_name=$(jq -r '.[0].name' <<<"$monitors")
+  scale=$(jq -r '.[0].scale' <<<"$monitors")
+
+  local geometry widget
+  geometry=$(omarchy-shell shell debugBarGeometry)
+  widget=$(jq -c --arg id "$plugin_id" '.[] | select(.id == $id)' <<<"$geometry")
+  [[ -n $widget ]] || die "bar geometry has no $plugin_id slot. Do not move or enable the widget from verification."
+  [[ $(jq -r '.section' <<<"$widget") == "$expected_section" ]] || die "widget section is $(jq -r '.section' <<<"$widget"), expected $expected_section"
+  [[ $(jq -r '.visible' <<<"$widget") == true ]] || die "widget is not visible"
+  [[ $(jq -r '.width' <<<"$widget") -gt 0 && $(jq -r '.height' <<<"$widget") -gt 0 ]] || die "widget size is empty"
+
+  local gx gy gw gh
+  read -r gx gy gw gh <<<"$(jq -r '"\(.x) \(.y) \(.width) \(.height)"' <<<"$widget")"
+
+  echo "instance: live-omarchy-shell"
+  echo "socket: $socket"
+  echo "wayland: $WAYLAND_DISPLAY"
+  echo "monitor: $monitor_name @ 0,0 scale $scale"
+  echo "plugin: $plugin_id"
+  echo "plugin_dir: $plugin_dir"
+  echo "plugin_dir_symlink: no"
+  echo "manifest_version: $manifest_version"
+  echo "enabled: true"
+  echo "active: $(jq -r '.active' <<<"$entry")"
+  echo "section: $expected_section"
+  echo "visible: true"
+  echo "geometry: ${gx},${gy} ${gw}x${gh}"
+  echo "verdict: worth-driving"
+}
+
+tiled_clients() {
+  jq -S '[.[] | select(.floating != true) | {address, class, at, size}] | sort_by(.address)'
+}
+
+# The EXIT trap runs after drive_bar_label returns, so this path cannot be a local.
+scratch_path=""
+
+cleanup_scratch() {
+  if [[ -n $scratch_path ]]; then
+    rm -rf "$scratch_path"
+  fi
+}
+
+drive_bar_label() {
+  local run_id scratch evidence
+  run_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
+  scratch_path="$scratch_root/$run_id"
+  scratch="$scratch_path"
+  evidence="$evidence_root/$run_id"
+  mkdir -p "$scratch" "$evidence"
+  printf '%s\n' "$run_id" >"$scratch/$marker_name"
+  trap cleanup_scratch EXIT
+
+  if ! doctor >"$evidence/doctor.txt" 2>"$evidence/doctor.err"; then
+    echo "result: fail" >"$evidence/result.txt"
+    echo "feature: bar-label" >>"$evidence/result.txt"
+    echo "entry: top-bar-left" >>"$evidence/result.txt"
+    echo "reason: doctor refused to drive" >>"$evidence/result.txt"
+    echo "evidence: $evidence"
+    echo "result: fail"
+    cat "$evidence/doctor.err" >&2 || true
+    exit 1
+  fi
+  # doctor prints the verdict to the evidence file. A leftover stderr file is empty on success.
+  if [[ ! -s $evidence/doctor.err ]]; then
+    rm -f "$evidence/doctor.err"
+  fi
+
+  hyprctl clients -j | tiled_clients >"$evidence/clients-before.json"
+  local geometry widget
+  geometry=$(omarchy-shell shell debugBarGeometry)
+  printf '%s\n' "$geometry" >"$evidence/geometry.json"
+  widget=$(jq -c --arg id "$plugin_id" '.[] | select(.id == $id)' "$evidence/geometry.json")
+  printf '%s\n' "$widget" >"$evidence/widget.json"
+  omarchy plugin list --json | jq -c --arg id "$plugin_id" '.[] | select(.id == $id)' >"$evidence/plugin.json"
+
+  local x y w h cx cw ch
+  read -r x y w h <<<"$(jq -r '"\(.x) \(.y) \(.width) \(.height)"' "$evidence/widget.json")"
+  # The label's left margin sits inside the slot, and the last glyph can paint
+  # past the slot width. Pad in logical pixels. grim takes these coordinates
+  # and writes a PNG in physical pixels.
+  local left_pad=8 right_pad=24 bottom_pad=8
+  if ((x >= left_pad)); then
+    cx=$((x - left_pad))
+  else
+    cx=0
+  fi
+  cw=$((x + w + right_pad - cx))
+  ch=$((h + bottom_pad))
+  local crop="${cx},${y} ${cw}x${ch}"
+  printf '%s\n' "$crop" >"$evidence/crop.txt"
+
+  grim -g "$crop" "$scratch/bar-label.png"
+  cp -a "$scratch/bar-label.png" "$evidence/bar-label.png"
+  tesseract "$evidence/bar-label.png" stdout --psm 7 >"$evidence/bar-label.ocr.txt" 2>"$evidence/tesseract.err" || true
+  if [[ ! -s $evidence/tesseract.err ]]; then
+    rm -f "$evidence/tesseract.err"
+  fi
+
+  hyprctl clients -j | tiled_clients >"$evidence/clients-after.json"
+  if diff -u "$evidence/clients-before.json" "$evidence/clients-after.json" >"$evidence/clients.diff"; then
+    echo "unchanged" >"$evidence/clients-stable.txt"
+    rm -f "$evidence/clients.diff"
+  else
+    echo "moved" >"$evidence/clients-stable.txt"
+  fi
+
+  local ocr_ok=no stable_ok=no
+  if grep -F -q "$expected_label" "$evidence/bar-label.ocr.txt"; then
+    ocr_ok=yes
+  fi
+  if [[ $(cat "$evidence/clients-stable.txt") == unchanged ]]; then
+    stable_ok=yes
+  fi
+
+  {
+    echo "feature: bar-label"
+    echo "entry: top-bar-left"
+    echo "label: $expected_label"
+    echo "ocr_contains_label: $ocr_ok"
+    echo "tiled_clients: $stable_ok"
+    if [[ $ocr_ok == yes && $stable_ok == yes ]]; then
+      echo "result: pass"
+    else
+      echo "result: fail"
+    fi
+  } >"$evidence/result.txt"
+
+  echo "evidence: $evidence"
+  cat "$evidence/result.txt"
+  [[ $ocr_ok == yes && $stable_ok == yes ]]
+}
+
+cleanup() {
+  local removed=0
+  if [[ -d $scratch_root ]]; then
+    local dir
+    for dir in "$scratch_root"/*; do
+      [[ -d $dir ]] || continue
+      if [[ -f $dir/$marker_name ]]; then
+        rm -rf "$dir"
+        removed=1
+      fi
+    done
+    rmdir "$scratch_root" 2>/dev/null || true
+  fi
+  if [[ -d $evidence_root ]]; then
+    echo "evidence kept: $evidence_root"
+  else
+    echo "evidence kept: none"
+  fi
+  if ((removed)); then
+    echo "scratch removed: $scratch_root"
+  else
+    echo "scratch removed: none"
+  fi
+}
+
+main() {
+  local cmd="${1:-}"
+  case "$cmd" in
+  doctor)
+    [[ $# -eq 1 ]] || usage
+    doctor
+    ;;
+  drive)
+    [[ $# -eq 2 ]] || usage
+    case "$2" in
+    bar-label) drive_bar_label ;;
+    *) die "unknown feature: $2" ;;
+    esac
+    ;;
+  cleanup)
+    [[ $# -eq 1 ]] || usage
+    cleanup
+    ;;
+  *)
+    usage
+    ;;
+  esac
+}
+
+main "$@"
