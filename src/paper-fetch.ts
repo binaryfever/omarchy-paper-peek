@@ -17,6 +17,7 @@ import { appendFile, mkdir, readdir, readFile, rename, writeFile } from "node:fs
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
+import { configuredPaperUrl, ensureSettingsDir, installHotkeys, loadSettings, settingsPayload } from "./settings.ts"
 
 declare const fileIdBrand: unique symbol
 declare const nodeIdBrand: unique symbol
@@ -25,7 +26,6 @@ declare const pageIdBrand: unique symbol
 const paperSourceBrand = Symbol("paper-source")
 
 const ID_TEXT = /^[A-Za-z0-9_-]+$/
-const ENDPOINT = "http://127.0.0.1:29979/mcp"
 const PLUGIN_TOOLS = ["list_resources", "get_basic_info", "get_screenshot"] as const
 
 type PluginTool = (typeof PLUGIN_TOOLS)[number]
@@ -217,10 +217,7 @@ function parseFolderId(raw: string): FolderId | null {
 }
 
 export function livePaper(options?: LivePaperOptions): PaperSource {
-  const endpoint =
-    options?.endpoint !== undefined && options.endpoint !== ""
-      ? options.endpoint
-      : envValue("PAPER_MCP_URL") ?? ENDPOINT
+  const endpoint = configuredPaperUrl(options?.endpoint)
   const cacheDir =
     options?.cacheDir !== undefined && options.cacheDir !== ""
       ? options.cacheDir
@@ -1472,7 +1469,24 @@ function splitRefresh(
 }
 
 async function main(argv: readonly string[]): Promise<0 | 2 | 3> {
+  if (argv.length === 1 && argv[0] === "settings") {
+    ensureSettingsDir()
+    const report = loadSettings()
+    writeWarnings(report.warnings)
+    process.stdout.write(`${JSON.stringify(settingsPayload(report))}\n`)
+    return 0
+  }
+  if (argv.length === 1 && argv[0] === "apply-hotkeys") {
+    const extra = await installHotkeys(loadSettings().settings)
+    writeWarnings(extra)
+    process.stdout.write(`${JSON.stringify({ warnings: extra })}\n`)
+    return 0
+  }
   return run(argv, livePaper())
+}
+
+function writeWarnings(warnings: readonly string[]): void {
+  for (const warning of warnings) process.stderr.write(`paper-peek: ${warning}\n`)
 }
 
 function flagValue(argv: readonly string[], flag: string): string | null {

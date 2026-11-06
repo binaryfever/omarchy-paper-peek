@@ -16,7 +16,16 @@ Item {
   readonly property string cacheDir: Quickshell.env("PAPER_PEEK_CACHE") || (home + "/.cache/paper-peek")
   readonly property string fetchScript: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omarchy/plugins/fmchale.paper-peek/scripts/paper-fetch"
   readonly property string absentCatalog: cacheDir + "/absent"
-  readonly property int drawerWidth: 480
+  readonly property string settingsDir: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/paper-peek"
+  readonly property string settingsPath: settingsDir + "/settings.json"
+  property string drawerSide: "right"
+  property int drawerWidth: 480
+  property int refreshIntervalMs: 2000
+  property string defaultMode: "drawer"
+  property string paperUrl: ""
+  property bool openIntoBrowser: false
+  property bool settingsQueued: false
+  property bool hotkeysQueued: false
   readonly property int rowHeight: Style.font.body + Style.spacing.lg * 2
 
   property string fileId: ""
@@ -93,6 +102,33 @@ Item {
     startCommand(["resolve"], "resolve")
   }
 
+  function present() {
+    if (root.defaultMode === "float") {
+      root.enterFloat()
+      return
+    }
+    if (root.defaultMode === "dock") {
+      root.dock("")
+      return
+    }
+    root.open("")
+  }
+
+  function shown() {
+    return root.opened || root.floated || root.docked
+  }
+
+  function openBrowser() {
+    if (root.opened || root.docked) {
+      root.showBrowser()
+      return
+    }
+    root.openIntoBrowser = true
+    if (root.floated) root.floated = false
+    if (root.defaultMode === "dock") root.dock("")
+    else root.open("")
+  }
+
   function refreshShot() {
     if (fileId === "" || nodeId === "") return
     if (shotFetch.running) return
@@ -123,7 +159,7 @@ Item {
       return
     }
     if (opened) close("")
-    else open("")
+    else present()
   }
 
   function attachBody(toDock) {
@@ -408,7 +444,10 @@ Item {
   function finishCommand(text) {
     var name = root.pending
     root.pending = ""
-    if (!root.opened && !root.docked) return
+    if (!root.opened && !root.docked) {
+      root.openIntoBrowser = false
+      return
+    }
     var parsed = null
     try {
       parsed = JSON.parse(String(text || ""))
@@ -421,6 +460,11 @@ Item {
   }
 
   function applyResolve(parsed) {
+    if (root.openIntoBrowser) {
+      root.openIntoBrowser = false
+      root.showBrowser()
+      return
+    }
     if (parsed && parsed.kind === "projects") {
       root.notice = typeof parsed.notice === "string" ? parsed.notice : ""
       root.view = "projects"
@@ -582,9 +626,65 @@ Item {
     event.accepted = true
   }
 
+  function reloadSettings() {
+    if (settingsFetch.running) {
+      root.settingsQueued = true
+      return
+    }
+    settingsFetch.running = true
+  }
+
+  function applySettingsText(text) {
+    var parsed = null
+    try {
+      parsed = JSON.parse(String(text || ""))
+    } catch (e) {
+      parsed = null
+    }
+    if (!parsed || (parsed.drawerSide !== "left" && parsed.drawerSide !== "right")) {
+      console.warn("paper-peek: settings reply was not usable")
+      return
+    }
+    root.drawerSide = parsed.drawerSide
+    if (typeof parsed.drawerWidth === "number") root.drawerWidth = parsed.drawerWidth
+    if (typeof parsed.refreshIntervalMs === "number") {
+      root.refreshIntervalMs = parsed.refreshIntervalMs
+      if (statusTimer.running) statusTimer.restart()
+      if (watchTimer.running) watchTimer.restart()
+    }
+    if (parsed.defaultMode === "drawer" || parsed.defaultMode === "float" || parsed.defaultMode === "dock")
+      root.defaultMode = parsed.defaultMode
+    root.paperUrl = parsed.source === "file" && typeof parsed.paperUrl === "string" ? parsed.paperUrl : ""
+    var warnings = parsed.warnings
+    if (warnings && warnings.length) {
+      for (var i = 0; i < warnings.length; i++) console.warn("paper-peek: " + warnings[i])
+    }
+    root.applyHotkeys()
+  }
+
+  function applyHotkeys() {
+    if (hotkeyFetch.running) {
+      root.hotkeysQueued = true
+      return
+    }
+    hotkeyFetch.running = true
+  }
+
+  function logWarnings(text) {
+    var parsed = null
+    try {
+      parsed = JSON.parse(String(text || ""))
+    } catch (e) {
+      parsed = null
+    }
+    var warnings = parsed && parsed.warnings ? parsed.warnings : []
+    for (var i = 0; i < warnings.length; i++) console.warn("paper-peek: " + warnings[i])
+  }
+
   Process {
     id: shotFetch
     running: false
+    environment: root.paperUrl === "" ? ({}) : ({ PAPER_MCP_URL: root.paperUrl })
     command: [root.fetchScript, "shot", "x", "x"]
     onExited: function(exitCode) {
       if (exitCode === 0) root.shotRevision += 1
@@ -594,6 +694,7 @@ Item {
   Process {
     id: commandFetch
     running: false
+    environment: root.paperUrl === "" ? ({}) : ({ PAPER_MCP_URL: root.paperUrl })
     command: [root.fetchScript, "resolve"]
     stdout: StdioCollector {
       waitForEnd: true
@@ -605,7 +706,11 @@ Item {
   ShellIpc {
     target: "fmchale.paper-peek"
     function open(): string {
-      root.open("")
+      root.present()
+      return root.shown() ? "open" : "closed"
+    }
+    function browser(): string {
+      root.openBrowser()
       return "ok"
     }
     function close(): string {
@@ -614,7 +719,7 @@ Item {
     }
     function toggle(): string {
       root.toggle()
-      return root.opened ? "open" : "closed"
+      return root.shown() ? "open" : "closed"
     }
     function status(): string {
       return root.peekStatus
@@ -642,7 +747,8 @@ Item {
   }
 
   Timer {
-    interval: 2000
+    id: statusTimer
+    interval: root.refreshIntervalMs
     repeat: true
     running: true
     triggeredOnStart: true
@@ -650,7 +756,8 @@ Item {
   }
 
   Timer {
-    interval: 2000
+    id: watchTimer
+    interval: root.refreshIntervalMs
     repeat: true
     running: (root.opened || root.docked) && root.peekStatus === "live" && root.fileId !== "" && root.nodeId !== ""
     onTriggered: root.watchArtboard()
@@ -659,6 +766,7 @@ Item {
   Process {
     id: watchFetch
     running: false
+    environment: root.paperUrl === "" ? ({}) : ({ PAPER_MCP_URL: root.paperUrl })
     command: [root.fetchScript, "watch", "x", "x"]
     stdout: StdioCollector {
       waitForEnd: true
@@ -672,12 +780,66 @@ Item {
   Process {
     id: statusProbe
     running: false
+    environment: root.paperUrl === "" ? ({}) : ({ PAPER_MCP_URL: root.paperUrl })
     command: [root.fetchScript, "status"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyStatus(text)
     }
   }
+
+  Process {
+    id: settingsFetch
+    running: false
+    command: [root.fetchScript, "settings"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applySettingsText(text)
+    }
+    onExited: {
+      if (root.settingsQueued) {
+        root.settingsQueued = false
+        root.reloadSettings()
+        return
+      }
+      if (!settingsWatch.running) settingsWatch.running = true
+    }
+  }
+
+  Process {
+    id: hotkeyFetch
+    running: false
+    command: [root.fetchScript, "apply-hotkeys"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.logWarnings(text)
+    }
+    onExited: {
+      if (!root.hotkeysQueued) return
+      root.hotkeysQueued = false
+      root.applyHotkeys()
+    }
+  }
+
+  Process {
+    id: settingsWatch
+    running: false
+    command: ["inotifywait", "-m", "-q", "-e", "close_write,create,delete,move", "--format", "%f", root.settingsDir]
+    stdout: SplitParser {
+      onRead: function(line) {
+        if (String(line).trim() === "settings.json") root.reloadSettings()
+      }
+    }
+    onExited: settingsWatchRetry.start()
+  }
+
+  Timer {
+    id: settingsWatchRetry
+    interval: 2000
+    onTriggered: if (!settingsWatch.running) settingsWatch.running = true
+  }
+
+  Component.onCompleted: root.reloadSettings()
 
   FileView {
     path: root.statusPath
@@ -759,15 +921,19 @@ Item {
       id: surface
       width: root.drawerWidth
       height: window.height
-      x: (window.screen ? window.screen.width : width) - width * window.reveal
+      x: {
+        var span = width * window.reveal
+        if (root.drawerSide === "left") return span - width
+        var screenWidth = window.screen ? window.screen.width : width
+        return screenWidth - span
+      }
       color: Commons.Color.popups.background
       radius: Style.cornerRadius
 
       Rectangle {
         width: Math.max(1, Style.spacing.hairline)
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        anchors.left: parent.left
+        height: parent.height
+        x: root.drawerSide === "left" ? parent.width - width : 0
         color: Commons.Color.popups.border
       }
 

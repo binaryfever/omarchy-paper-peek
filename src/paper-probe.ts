@@ -7,6 +7,7 @@ import {
   stat,
 } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
+import { configuredPaperUrl } from "./settings.ts"
 
 export type ExitCode = 0 | 1 | 2 | 3
 
@@ -484,10 +485,7 @@ async function run(claimed: SelectionCase, io: ProbeIo, sink: SampleSink): Promi
 }
 
 function liveIo(): ProbeIo {
-  const endpoint =
-    process.env.PAPER_MCP_URL !== undefined && process.env.PAPER_MCP_URL !== ""
-      ? process.env.PAPER_MCP_URL
-      : "http://127.0.0.1:29979/mcp"
+  const endpoint = configuredPaperUrl()
 
   let sessionId: string | null = null
   let nextId = 1

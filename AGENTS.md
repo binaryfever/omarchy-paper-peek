@@ -15,11 +15,12 @@ Cache to keep tabs to a minimum. Call get_basic_info for a project only the firs
 Paper tools used (read only): list_resources (projects), get_basic_info and get_children (pages and artboards, by file id), get_screenshot (by node id).
 Screenshots are JPEG. The get_screenshot reply shape varies, so parse the image out of whatever content items come back instead of assuming a fixed order. Artboard heights may be missing on inactive pages; take size from the screenshot.
 Cache: ~/.cache/paper-peek/ holds projects.json, pages/<fileId>.json, artboards/<fileId>/<pageId>.json, and shots/<fileId>/<nodeId>.jpg with a matching .json. `scripts/paper-fetch` writes those files. `pages` and `artboards` call `get_basic_info` on the first read and on `--refresh`, and serve the cache otherwise. Current and recent artboards live in a state file.
+Settings: `~/.config/paper-peek/settings.json`. Every key is listed in the README. No file means the defaults. `src/settings.ts` parses the file. The drawer watches that directory and applies a new side without a shell restart.
 Findings so far: see FMC-664 in Linear and docs/paper-mcp.md.
 Rules
 Read only against Paper. Never call Paper tools that open files, select, write, edit, or delete anything. The user must never need to open, select, or click anything in Paper for the plugin to work.
 Never edit Omarchy's own files under ~/.local/share/omarchy/. Reading them to learn how first-party plugins work is fine. Only change user config: ~/.config/omarchy/, ~/.config/hypr/.
-Don't change existing keybindings. Check omarchy menu keybindings --print before adding one.
+Don't change existing keybindings. Check `omarchy menu keybindings --print` before adding one. Paper Peek's toggle and browser chords are the exception, and they come from the settings file. The plugin binds those two chords with `hyprctl eval`. It does not edit `bindings.lua`. With no settings file it leaves the existing Super+Shift+H toggle bind untouched.
 Paper can be closed. Every code path must handle Paper being unreachable, or an artboard having been deleted, without crashing, and keep showing the last cached image.
 Keep the shell light. Plugins run inside the long-lived omarchy-shell process. No busy loops. The status word is polled on a timer. Artboard change checks run only while the drawer is open, and only a changed `updatedAt` from `list_resources` fetches a new screenshot.
 Record decisions in docs/decisions/NNN-short-title.md with what was chosen and why.
