@@ -4,6 +4,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+import "theme-green.js" as ThemeGreen
 
 BarWidget {
   id: root
@@ -13,6 +14,20 @@ BarWidget {
   readonly property string statusPath: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/paper-peek/status"
 
   property string peekStatus: "off"
+  property bool hasThemeGreen: false
+  property color themeGreen: Commons.Color.accent
+  readonly property color liveColor: hasThemeGreen ? themeGreen : Commons.Color.accent
+  readonly property string themeColorsPath: home + "/.local/state/omarchy/current/theme/colors.toml"
+
+  function applyThemeGreen(raw) {
+    var color = ThemeGreen.greenIn(raw)
+    if (color !== "") {
+      root.themeGreen = color
+      root.hasThemeGreen = true
+      return
+    }
+    root.hasThemeGreen = false
+  }
 
   implicitWidth: vertical ? barSize : Style.bar.statusSlot
   implicitHeight: vertical ? Style.bar.statusSlot : barSize
@@ -35,6 +50,23 @@ BarWidget {
     onFileChanged: reload()
   }
 
+  FileView {
+    id: themeColors
+    path: root.themeColorsPath
+    watchChanges: false
+    blockLoading: false
+    printErrors: false
+    onLoaded: root.applyThemeGreen(text())
+    onLoadFailed: root.applyThemeGreen("")
+  }
+
+  Connections {
+    target: Commons.Color
+    function onShellValuesChanged() {
+      themeColors.reload()
+    }
+  }
+
   WidgetButton {
     anchors.fill: parent
     bar: root.bar
@@ -50,7 +82,7 @@ BarWidget {
       height: 8
       radius: 4
       anchors.centerIn: parent
-      color: root.peekStatus === "live" ? "#6fbf73" : (root.peekStatus === "not-live" ? Commons.Color.urgent : Commons.Color.muted)
+      color: root.peekStatus === "live" ? root.liveColor : (root.peekStatus === "not-live" ? Commons.Color.urgent : Commons.Color.muted)
     }
   }
 }
