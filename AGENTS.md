@@ -8,13 +8,13 @@ How it works
 Platform: Omarchy 4 on Arch Linux with Hyprland. The Omarchy shell (omarchy-shell) is a single Quickshell process; every bar widget, panel, and overlay is a plugin.
 Plugin code: QML and JavaScript. Entry points are declared in manifest.json at the repo root.
 Plugin id: fmchale.paper-peek. Never change it. The omarchy. prefix is reserved for first-party plugins.
-Design source: Paper Desktop's local MCP server at http://127.0.0.1:29979/mcp. Paper Desktop must be running, but no file needs to be open.
+Design source: Paper Desktop's local MCP server at http://127.0.0.1:29979/mcp. Paper Desktop must be running. `list_resources` works when no file is open. A screenshot requires the file to already be open, because screenshotting a closed file opens a tab.
 Always read by id. Calls without a file id (like get_basic_info) fail with "Open a Paper file" when nothing is open. Pass the file id and node id on every read.
-What by-id reads do to Paper (tested in FMC-665): list_resources and get_screenshot change nothing. get_basic_info with a file id opens that file as a background tab, never the active one, even when nothing was open. The user never has to open anything, but each get_basic_info call can leave a tab behind, and there is no tool to close it.
+What by-id reads do to Paper: `list_resources` does not change which files are open. `get_basic_info` with a file id opens that file as a background tab, and there is no tool to close it. `get_screenshot` for a file that is already open leaves those flags unchanged. `get_screenshot` for a closed file opens that file. `scripts/paper-fetch` calls `get_screenshot` only when `list_resources` shows the file open.
 Cache to keep tabs to a minimum. Call get_basic_info for a project only the first time the user browses into it, or when they explicitly refresh. Serve pages and artboards from the cache otherwise.
 Paper tools used (read only): list_resources (projects), get_basic_info and get_children (pages and artboards, by file id), get_screenshot (by node id).
 Screenshots are JPEG. The get_screenshot reply shape varies, so parse the image out of whatever content items come back instead of assuming a fixed order. Artboard heights may be missing on inactive pages; take size from the screenshot.
-Cache: ~/.cache/paper-peek/ holds projects.json, pages/<fileId>.json, artboards/<fileId>/<pageId>.json, and shots/<nodeId>.jpg with a matching .json. Current and recent artboards live in a state file.
+Cache: ~/.cache/paper-peek/ holds projects.json, pages/<fileId>.json, artboards/<fileId>/<pageId>.json, and shots/<fileId>/<nodeId>.jpg with a matching .json. `scripts/paper-fetch` writes the project list and the screenshots. Current and recent artboards live in a state file.
 Findings so far: see FMC-664 in Linear and docs/paper-mcp.md.
 Rules
 Read only against Paper. Never call Paper tools that open files, select, write, edit, or delete anything. The user must never need to open, select, or click anything in Paper for the plugin to work.
