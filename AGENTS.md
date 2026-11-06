@@ -14,7 +14,7 @@ What by-id reads do to Paper: `list_resources` does not change which files are o
 Cache to keep tabs to a minimum. Call get_basic_info for a project only the first time the user browses into it, or when they explicitly refresh. Serve pages and artboards from the cache otherwise.
 Paper tools used (read only): list_resources (projects), get_basic_info and get_children (pages and artboards, by file id), get_screenshot (by node id).
 Screenshots are JPEG. The get_screenshot reply shape varies, so parse the image out of whatever content items come back instead of assuming a fixed order. Artboard heights may be missing on inactive pages; take size from the screenshot.
-Cache: ~/.cache/paper-peek/ holds projects.json, pages/<fileId>.json, artboards/<fileId>/<pageId>.json, and shots/<fileId>/<nodeId>.jpg with a matching .json. `scripts/paper-fetch` writes the project list and the screenshots. Current and recent artboards live in a state file.
+Cache: ~/.cache/paper-peek/ holds projects.json, pages/<fileId>.json, artboards/<fileId>/<pageId>.json, and shots/<fileId>/<nodeId>.jpg with a matching .json. `scripts/paper-fetch` writes those files. `pages` and `artboards` call `get_basic_info` on the first read and on `--refresh`, and serve the cache otherwise. Current and recent artboards live in a state file.
 Findings so far: see FMC-664 in Linear and docs/paper-mcp.md.
 Rules
 Read only against Paper. Never call Paper tools that open files, select, write, edit, or delete anything. The user must never need to open, select, or click anything in Paper for the plugin to work.
