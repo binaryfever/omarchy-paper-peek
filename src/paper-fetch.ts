@@ -1,4 +1,5 @@
-import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises"
+import { realpathSync } from "node:fs"
+import { appendFile, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -82,6 +83,11 @@ export type ArtboardResult =
   | { readonly kind: "fresh"; readonly image: ArtboardImage }
   | { readonly kind: "cached"; readonly image: ArtboardImage; readonly reason: ShotRefusal }
   | { readonly kind: "unavailable"; readonly reason: ShotRefusal }
+
+export type WatchResult =
+  | { readonly kind: "changed" }
+  | { readonly kind: "unchanged" }
+  | { readonly kind: "down" }
 
 export type StoredProjects =
   | { readonly kind: "cached"; readonly index: ProjectIndex }
@@ -239,33 +245,36 @@ export async function reportStatus(source: PaperSource, currentText: string): Pr
 }
 
 export async function listProjects(source: PaperSource): Promise<ProjectResult> {
-  try {
-    const raw = await postTool(source, "list_resources", null)
-    const index = parseToolIndex(raw)
-    if (index instanceof Fail) return fallbackProjects(source, index.reason)
-    await commitFile(join(cacheDirOf(source), "projects.json"), textBytes(JSON.stringify(index)))
-    return { kind: "fresh", index }
-  } catch {
-    return fallbackProjects(source, "paper-down")
+  const loaded = await readResourceList(source)
+  if (loaded instanceof Fail) {
+    return fallbackProjects(source, loaded.reason === "bad-payload" ? "bad-payload" : "paper-down")
   }
+  await commitFile(
+    join(cacheDirOf(source), "projects.json"),
+    textBytes(JSON.stringify(loaded.index)),
+  )
+  return { kind: "fresh", index: loaded.index }
 }
 
 export async function fetchArtboard(
   source: PaperSource,
   target: ArtboardTarget,
 ): Promise<ArtboardResult> {
-  const listed = await listProjects(source)
-  if (listed.kind !== "fresh") {
-    const reason = listed.kind === "unavailable" ? listed.reason : "paper-down"
-    return storedShot(source, target, reason)
+  const loaded = await readResourceList(source)
+  if (loaded instanceof Fail) {
+    return storedShot(source, target, loaded.reason === "bad-payload" ? "bad-payload" : "paper-down")
   }
-  const gate = decideShot(listed, target)
+  await commitFile(
+    join(cacheDirOf(source), "projects.json"),
+    textBytes(JSON.stringify(loaded.index)),
+  )
+  const gate = decideShot({ kind: "fresh", index: loaded.index }, target)
   if (gate.kind === "refuse") return storedShot(source, target, gate.reason)
   try {
     const raw = await postTool(source, "get_screenshot", target)
     const frame = jpegFromToolResult(raw)
     if (frame instanceof Fail) return storedShot(source, target, frame.reason)
-    await storeShot(cacheDirOf(source), target, frame)
+    await storeShot(cacheDirOf(source), target, frame, fileUpdatedAt(loaded.raw, target.fileId))
     const stored = await readArtboard(source, target)
     if (stored.kind !== "cached") return { kind: "unavailable", reason: "bad-image" }
     return { kind: "fresh", image: stored.image }
@@ -273,6 +282,36 @@ export async function fetchArtboard(
     const reason = err instanceof Fail ? err.reason : "paper-down"
     return storedShot(source, target, reason)
   }
+}
+
+export async function watchArtboard(
+  source: PaperSource,
+  target: ArtboardTarget,
+): Promise<WatchResult> {
+  const loaded = await readResourceList(source)
+  if (loaded instanceof Fail) return { kind: "down" }
+  const gate = decideShot({ kind: "fresh", index: loaded.index }, target)
+  if (gate.kind === "refuse") return { kind: "unchanged" }
+  const stamp = fileUpdatedAt(loaded.raw, target.fileId)
+  if (stamp === null) return { kind: "unchanged" }
+  const seen = await readShotStamp(cacheDirOf(source), target)
+  if (seen === stamp) return { kind: "unchanged" }
+  return { kind: "changed" }
+}
+
+async function readResourceList(
+  source: PaperSource,
+): Promise<{ readonly raw: unknown; readonly index: ProjectIndex } | Fail> {
+  let raw: unknown
+  try {
+    raw = await postTool(source, "list_resources", null)
+  } catch (err) {
+    if (err instanceof Fail && err.reason !== "bad-image") return err
+    return new Fail("paper-down")
+  }
+  const index = parseToolIndex(raw)
+  if (index instanceof Fail) return index
+  return { raw, index }
 }
 
 export async function readProjects(source: PaperSource): Promise<StoredProjects> {
@@ -503,32 +542,18 @@ function parseSse(body: string): { readonly result: unknown; readonly error?: un
 }
 
 function parseToolIndex(raw: unknown): ProjectIndex | Fail {
-  if (!isRecord(raw)) return new Fail("bad-payload")
-  if (raw.isError === true) return new Fail("bad-payload")
-  if (!Array.isArray(raw.content)) return new Fail("bad-payload")
-  const pages: unknown[] = []
-  for (const block of raw.content) {
-    if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") continue
-    try {
-      const parsed = JSON.parse(block.text) as unknown
-      if (isRecord(parsed) && Array.isArray(parsed.resources)) pages.push(parsed)
-    } catch {
-      return new Fail("bad-payload")
-    }
-  }
-  if (pages.length !== 1) return new Fail("bad-payload")
-  const page = pages[0]
-  if (!isRecord(page) || !Array.isArray(page.resources)) return new Fail("bad-payload")
+  const page = wirePage(raw)
+  if (page === null) return new Fail("bad-payload")
   const resources: ProjectResource[] = []
   const seen = new Set<string>()
-  for (const item of page.resources) {
+  for (const item of page.items) {
     const resource = parseWireResource(item)
     if (resource instanceof Fail) return resource
     if (seen.has(resource.id)) return new Fail("bad-payload")
     seen.add(resource.id)
     resources.push(resource)
   }
-  return { resources, truncated: page.truncated === true }
+  return { resources, truncated: page.truncated }
 }
 
 function parseWireResource(item: unknown): ProjectResource | Fail {
@@ -642,22 +667,79 @@ async function storedShot(
   return { kind: "unavailable", reason }
 }
 
-async function storeShot(dir: string, target: ArtboardTarget, frame: Frame): Promise<void> {
+async function storeShot(
+  dir: string,
+  target: ArtboardTarget,
+  frame: Frame,
+  updatedAt: number | null,
+): Promise<void> {
   const placed = await findCachedArtboard(dir, target)
   await commitFile(shotJpegPath(dir, target), frame.bytes)
-  await commitFile(
-    shotSidecarPath(dir, target),
-    textBytes(
-      JSON.stringify({
-        name: placed === null ? null : placed.name,
-        file: target.fileId,
-        page: placed === null ? null : placed.page,
-        timestamp: new Date().toISOString(),
-        note: frame.note,
-        byteLength: frame.bytes.byteLength,
-      }),
-    ),
-  )
+  const record: {
+    name: string | null
+    file: FileId
+    page: string | null
+    timestamp: string
+    note: string | null
+    byteLength: number
+    updatedAt?: number
+  } = {
+    name: placed === null ? null : placed.name,
+    file: target.fileId,
+    page: placed === null ? null : placed.page,
+    timestamp: new Date().toISOString(),
+    note: frame.note,
+    byteLength: frame.bytes.byteLength,
+  }
+  if (updatedAt !== null) record.updatedAt = updatedAt
+  await commitFile(shotSidecarPath(dir, target), textBytes(JSON.stringify(record)))
+}
+
+async function readShotStamp(dir: string, target: ArtboardTarget): Promise<number | null> {
+  try {
+    const parsed = JSON.parse(await readFile(shotSidecarPath(dir, target), "utf8")) as unknown
+    if (!isRecord(parsed)) return null
+    if (typeof parsed.updatedAt !== "number" || !Number.isFinite(parsed.updatedAt)) return null
+    return parsed.updatedAt
+  } catch {
+    return null
+  }
+}
+
+function fileUpdatedAt(raw: unknown, fileId: FileId): number | null {
+  const page = wirePage(raw)
+  if (page === null) return null
+  for (const item of page.items) {
+    if (item.id !== fileId || item.type !== "file") continue
+    if (typeof item.updatedAt !== "number" || !Number.isFinite(item.updatedAt)) return null
+    return item.updatedAt
+  }
+  return null
+}
+
+function wirePage(
+  raw: unknown,
+): { readonly items: readonly Record<string, unknown>[]; readonly truncated: boolean } | null {
+  if (!isRecord(raw) || raw.isError === true || !Array.isArray(raw.content)) return null
+  const pages: Record<string, unknown>[] = []
+  for (const block of raw.content) {
+    if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") continue
+    try {
+      const parsed = JSON.parse(block.text) as unknown
+      if (isRecord(parsed) && Array.isArray(parsed.resources)) pages.push(parsed)
+    } catch {
+      return null
+    }
+  }
+  if (pages.length !== 1) return null
+  const page = pages[0]
+  if (page === undefined || !Array.isArray(page.resources)) return null
+  const items: Record<string, unknown>[] = []
+  for (const item of page.resources) {
+    if (!isRecord(item)) return null
+    items.push(item)
+  }
+  return { items, truncated: page.truncated === true }
 }
 
 async function sidecarNote(
@@ -940,6 +1022,18 @@ function statusFilePath(): string {
   return join(stateHome(), "paper-peek", "status")
 }
 
+function refreshLogPath(): string {
+  const override = envValue("PAPER_PEEK_LOG")
+  if (override !== null && override !== "") return override
+  return join(stateHome(), "paper-peek", "refresh.log")
+}
+
+async function logRefresh(line: string): Promise<void> {
+  const path = refreshLogPath()
+  await mkdir(dirname(path), { recursive: true })
+  await appendFile(path, `${line}\n`)
+}
+
 async function readCurrentArtboardText(): Promise<string> {
   try {
     return await readFile(currentArtboardPath(), "utf8")
@@ -989,6 +1083,7 @@ type Command =
       readonly refresh: boolean
     }
   | { readonly kind: "shot"; readonly fileId: FileId; readonly nodeId: NodeId }
+  | { readonly kind: "watch"; readonly fileId: FileId; readonly nodeId: NodeId }
 
 export async function run(argv: readonly string[], source: PaperSource): Promise<0 | 2 | 3> {
   const command = parseCommand(argv)
@@ -1013,11 +1108,18 @@ export async function run(argv: readonly string[], source: PaperSource): Promise
   }
   if (command.kind === "shot") {
     const result = await fetchArtboard(source, { fileId: command.fileId, nodeId: command.nodeId })
+    if (result.kind === "fresh") await logRefresh(`fetch ${command.fileId} ${command.nodeId}`)
     process.stdout.write(`${JSON.stringify(result)}\n`)
     if (result.kind === "unavailable") {
       process.stderr.write(`${result.reason}\n`)
       return 2
     }
+    return 0
+  }
+  if (command.kind === "watch") {
+    const result = await watchArtboard(source, { fileId: command.fileId, nodeId: command.nodeId })
+    await logRefresh(`check ${command.fileId} ${command.nodeId} ${result.kind}`)
+    process.stdout.write(`${result.kind}\n`)
     return 0
   }
   if (command.kind === "pages") {
@@ -1043,7 +1145,16 @@ function parseCommand(argv: readonly string[]): Command | "bad-args" | "bad-id" 
   if (argv[0] === "pages") return parsePages(argv)
   if (argv[0] === "artboards") return parseArtboards(argv)
   if (argv[0] === "shot") return parseShot(argv)
+  if (argv[0] === "watch") return parseWatch(argv)
   return "bad-args"
+}
+
+function parseWatch(argv: readonly string[]): Command | "bad-args" | "bad-id" {
+  if (argv.length !== 3 || argv[1]!.startsWith("-") || argv[2]!.startsWith("-")) return "bad-args"
+  const fileId = parseFileId(argv[1]!)
+  const nodeId = parseNodeId(argv[2]!)
+  if (fileId === null || nodeId === null) return "bad-id"
+  return { kind: "watch", fileId, nodeId }
 }
 
 function parsePages(argv: readonly string[]): Command | "bad-args" | "bad-id" {
@@ -1113,7 +1224,8 @@ function flagValue(argv: readonly string[], flag: string): string | null {
 }
 
 const entry = process.argv[1]
-if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
+const entryUrl = entry === undefined ? "" : pathToFileURL(realpathSync(entry)).href
+if (entry !== undefined && import.meta.url === entryUrl) {
   main(process.argv.slice(2)).then(
     (code) => {
       process.exit(code)

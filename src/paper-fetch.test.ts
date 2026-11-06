@@ -69,16 +69,18 @@ function ids(): ArtboardTarget {
   return { fileId, nodeId }
 }
 
-function listPayload(open: boolean, parentId?: string): unknown {
-  const file = open
+function listPayload(open: boolean, parentId?: string, updatedAt?: number): unknown {
+  const file: Record<string, unknown> = open
     ? { id: FILE, name: "Audiol", type: "file", open: true, active: false }
     : { id: FILE, name: "Audiol", type: "file" }
+  if (parentId !== undefined) file.parentId = parentId
+  if (updatedAt !== undefined) file.updatedAt = updatedAt
   return {
     content: [
       {
         type: "text",
         text: JSON.stringify({
-          resources: [parentId === undefined ? file : { ...file, parentId }],
+          resources: [file],
         }),
       },
     ],
@@ -107,6 +109,8 @@ async function runTests(): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "paper-fetch-"))
   const jpeg = makeMinimalJpeg(8, 6)
   const target = ids()
+  const previousLog = process.env.PAPER_PEEK_LOG
+  process.env.PAPER_PEEK_LOG = join(dir, "refresh.log")
   try {
     let shots = 0
     let seenFile = ""
@@ -410,7 +414,97 @@ async function runTests(): Promise<void> {
     assert((await readFile(statusFile, "utf8")) === "not-live\n", "status writes the not-live word")
     const cacheNames = await readdir(statusCache)
     assert(!cacheNames.includes("projects.json"), "status does not write the project cache")
+
+    const watchDir = await mkdtemp(join(tmpdir(), "paper-fetch-watch-"))
+    const watchLog = join(watchDir, "refresh.log")
+    process.env.PAPER_PEEK_LOG = watchLog
+    let watchShots = 0
+    let stamp = 1790658894817
+    const watched = scriptedPaper({
+      cacheDir: watchDir,
+      listResources: () => listPayload(true, undefined, stamp),
+      screenshot: () => {
+        watchShots += 1
+        return shotPayload(jpeg, null)
+      },
+    })
+    const changed = await run(["watch", FILE, NODE], watched)
+    assert(changed === 0, "watch exits 0")
+    assert(
+      (await readFile(watchLog, "utf8")) === `check ${FILE} ${NODE} changed\n`,
+      "a new file stamp is logged as changed",
+    )
+    assert(watchShots === 0, "a check does not call get_screenshot")
+    assert(!(await readdir(watchDir)).includes("projects.json"), "a check does not write projects.json")
+    const fetched = await run(["shot", FILE, NODE], watched)
+    assert(fetched === 0 && watchShots === 1, "the shot after a change calls get_screenshot once")
+    const watchSidecar = JSON.parse(
+      await readFile(join(watchDir, "shots", FILE, `${NODE}.json`), "utf8"),
+    ) as { updatedAt?: number }
+    assert(watchSidecar.updatedAt === stamp, "the shot record stores the file stamp")
+    const quiet = await run(["watch", FILE, NODE], watched)
+    assert(quiet === 0 && watchShots === 1, "the same stamp does not fetch again")
+    const quietLines = (await readFile(watchLog, "utf8")).trim().split("\n")
+    assert(quietLines.filter((line) => line.startsWith("fetch ")).length === 1, "one fetch for one stamp change")
+    assert(quietLines.at(-1) === `check ${FILE} ${NODE} unchanged`, "the same stamp is logged as unchanged")
+    stamp += 1
+    const moved = await run(["watch", FILE, NODE], watched)
+    assert(moved === 0 && watchShots === 1, "a moved stamp is still only a check")
+    assert(
+      (await readFile(watchLog, "utf8")).trim().endsWith(`check ${FILE} ${NODE} changed`),
+      "a moved stamp is logged as changed",
+    )
+    const closedWatch = scriptedPaper({
+      cacheDir: watchDir,
+      listResources: () => listPayload(false, undefined, stamp + 5),
+      screenshot: () => {
+        watchShots += 1
+        return shotPayload(jpeg, null)
+      },
+    })
+    const closedWord = await run(["watch", FILE, NODE], closedWatch)
+    assert(closedWord === 0 && watchShots === 1, "a closed file does not fetch")
+    assert(
+      (await readFile(watchLog, "utf8")).trim().endsWith(`check ${FILE} ${NODE} unchanged`),
+      "a closed file is an unchanged check",
+    )
+    const downWatch = scriptedPaper({
+      cacheDir: watchDir,
+      listResources: () => {
+        throw new Error("connection refused")
+      },
+      screenshot: () => {
+        watchShots += 1
+        return shotPayload(jpeg, null)
+      },
+    })
+    const downWord = await run(["watch", FILE, NODE], downWatch)
+    assert(downWord === 0 && watchShots === 1, "Paper down does not fetch")
+    assert(
+      (await readFile(watchLog, "utf8")).trim().endsWith(`check ${FILE} ${NODE} down`),
+      "Paper down is logged as down",
+    )
+    const blindDir = await mkdtemp(join(tmpdir(), "paper-fetch-watch-blind-"))
+    process.env.PAPER_PEEK_LOG = join(blindDir, "refresh.log")
+    const blind = scriptedPaper({
+      cacheDir: blindDir,
+      listResources: () => listPayload(true),
+      screenshot: () => {
+        watchShots += 1
+        return shotPayload(jpeg, null)
+      },
+    })
+    const blindWord = await run(["watch", FILE, NODE], blind)
+    assert(blindWord === 0 && watchShots === 1, "a file with no stamp does not fetch")
+    assert(
+      (await readFile(join(blindDir, "refresh.log"), "utf8")) === `check ${FILE} ${NODE} unchanged\n`,
+      "a missing stamp is an unchanged check",
+    )
+    await rm(watchDir, { recursive: true, force: true })
+    await rm(blindDir, { recursive: true, force: true })
   } finally {
+    if (previousLog === undefined) delete process.env.PAPER_PEEK_LOG
+    else process.env.PAPER_PEEK_LOG = previousLog
     await rm(dir, { recursive: true, force: true })
   }
 
