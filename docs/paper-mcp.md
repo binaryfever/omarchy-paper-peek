@@ -28,7 +28,7 @@ docs/paper-mcp-samples/nothing-selected/get_selection.json.
 
 ## paper-fetch
 
-`scripts/paper-fetch` talks to Paper and writes `~/.cache/paper-peek`. `PAPER_PEEK_CACHE` overrides that directory. `PAPER_MCP_URL` overrides `http://127.0.0.1:29979/mcp`.
+`scripts/paper-fetch` talks to Paper and writes `~/.cache/paper-peek`. `PAPER_PEEK_CACHE` overrides that directory. The Paper address comes from `~/.config/paper-peek/settings.json` when that file sets `paperAddress`. `PAPER_MCP_URL` overrides both the file and `http://127.0.0.1:29979/mcp` for a direct `paper-fetch` run. The plugin passes the file's address when the file exists.
 
 Commands:
 
@@ -38,6 +38,8 @@ Commands:
 - `paper-fetch shot <fileId> <nodeId>`
 - `paper-fetch shot --file <fileId> --node <nodeId>`
 - `paper-fetch watch <fileId> <nodeId>`
+- `paper-fetch settings`
+- `paper-fetch apply-hotkeys`
 
 `projects` calls `list_resources` with limit 200. Each file in `projects.json` has `id`, `name`, and `folder`. `folder` is the parent folder id, or null when Paper omits `parentId`. The file also records `kind` (`open-file`, `closed-file`, or `folder`), `active` on an open file, and `truncated`.
 
