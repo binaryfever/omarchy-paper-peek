@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -6,22 +6,25 @@ import { pathToFileURL } from "node:url"
 declare const fileIdBrand: unique symbol
 declare const nodeIdBrand: unique symbol
 declare const folderIdBrand: unique symbol
+declare const pageIdBrand: unique symbol
 const paperSourceBrand = Symbol("paper-source")
 
 const ID_TEXT = /^[A-Za-z0-9_-]+$/
 const ENDPOINT = "http://127.0.0.1:29979/mcp"
-const PLUGIN_TOOLS = ["list_resources", "get_screenshot"] as const
+const PLUGIN_TOOLS = ["list_resources", "get_basic_info", "get_screenshot"] as const
 
 type PluginTool = (typeof PLUGIN_TOOLS)[number]
 
 export type FileId = string & { readonly [fileIdBrand]: true }
 export type NodeId = string & { readonly [nodeIdBrand]: true }
 export type FolderId = string & { readonly [folderIdBrand]: true }
+export type PageId = string & { readonly [pageIdBrand]: true }
 
 export type OpenFile = {
   readonly kind: "open-file"
   readonly id: FileId
   readonly name: string
+  readonly folder: FolderId | null
   readonly active: boolean
 }
 
@@ -29,6 +32,7 @@ export type ClosedFile = {
   readonly kind: "closed-file"
   readonly id: FileId
   readonly name: string
+  readonly folder: FolderId | null
 }
 
 export type FolderResource = {
@@ -95,7 +99,41 @@ export type PaperScript = {
   readonly cacheDir: string
   readonly listResources: () => unknown
   readonly screenshot?: (target: { readonly fileId: string; readonly nodeId: string }) => unknown
+  readonly basicInfo?: (target: { readonly fileId: string; readonly pageId?: string }) => unknown
 }
+
+export type CachedPage = {
+  readonly id: PageId
+  readonly name: string
+  readonly order: number
+}
+
+export type PageCatalog = {
+  readonly fileId: FileId
+  readonly pages: readonly CachedPage[]
+}
+
+export type PageResult =
+  | { readonly kind: "fresh"; readonly catalog: PageCatalog }
+  | { readonly kind: "cached"; readonly catalog: PageCatalog }
+  | { readonly kind: "unavailable"; readonly reason: "paper-down" | "bad-payload" }
+
+export type CachedArtboard = {
+  readonly id: NodeId
+  readonly name: string
+  readonly width: number | null
+}
+
+export type ArtboardCatalog = {
+  readonly fileId: FileId
+  readonly pageId: PageId
+  readonly artboards: readonly CachedArtboard[]
+}
+
+export type ArtboardCatalogResult =
+  | { readonly kind: "fresh"; readonly catalog: ArtboardCatalog }
+  | { readonly kind: "cached"; readonly catalog: ArtboardCatalog }
+  | { readonly kind: "unavailable"; readonly reason: "paper-down" | "bad-payload" }
 
 export type PaperSource = { readonly [paperSourceBrand]: true }
 
@@ -145,6 +183,11 @@ export function parseFileId(raw: string): FileId | null {
 export function parseNodeId(raw: string): NodeId | null {
   if (!ID_TEXT.test(raw)) return null
   return raw as NodeId
+}
+
+export function parsePageId(raw: string): PageId | null {
+  if (!ID_TEXT.test(raw)) return null
+  return raw as PageId
 }
 
 function parseFolderId(raw: string): FolderId | null {
@@ -247,6 +290,59 @@ export async function readArtboard(
   }
 }
 
+export async function listPages(
+  source: PaperSource,
+  fileId: FileId,
+  refresh: boolean,
+): Promise<PageResult> {
+  if (!refresh) {
+    const stored = await readPageCatalog(cacheDirOf(source), fileId)
+    if (stored !== null) return { kind: "cached", catalog: stored }
+  }
+  let raw: unknown
+  try {
+    raw = await postTool(source, "get_basic_info", { fileId })
+  } catch (err) {
+    return { kind: "unavailable", reason: downOrPayload(err) }
+  }
+  const catalog = parsePageCatalog(fileId, raw)
+  if (catalog instanceof Fail) return { kind: "unavailable", reason: "bad-payload" }
+  await commitFile(pagesPath(cacheDirOf(source), fileId), textBytes(JSON.stringify(catalog)))
+  return { kind: "fresh", catalog }
+}
+
+export async function listArtboards(
+  source: PaperSource,
+  fileId: FileId,
+  pageId: PageId,
+  refresh: boolean,
+): Promise<ArtboardCatalogResult> {
+  if (!refresh) {
+    const stored = await readArtboardCatalog(cacheDirOf(source), fileId, pageId)
+    if (stored !== null) return { kind: "cached", catalog: stored }
+  }
+  let raw: unknown
+  try {
+    raw = await postTool(source, "get_basic_info", { fileId, pageId })
+  } catch (err) {
+    return { kind: "unavailable", reason: downOrPayload(err) }
+  }
+  const parsed = parseArtboardCatalog(fileId, pageId, raw)
+  if (parsed instanceof Fail) return { kind: "unavailable", reason: "bad-payload" }
+  const filled = await fillMissingWidths(source, parsed)
+  if (filled instanceof Fail) return { kind: "unavailable", reason: downOrPayload(filled) }
+  await commitFile(
+    artboardsPath(cacheDirOf(source), fileId, pageId),
+    textBytes(JSON.stringify(filled)),
+  )
+  return { kind: "fresh", catalog: filled }
+}
+
+function downOrPayload(err: unknown): "paper-down" | "bad-payload" {
+  if (err instanceof Fail && err.reason !== "paper-down") return "bad-payload"
+  return "paper-down"
+}
+
 function decideShot(
   listed: Extract<ProjectResult, { readonly kind: "fresh" }>,
   target: ArtboardTarget,
@@ -263,28 +359,52 @@ function decideShot(
   return { kind: "fetch", file: match }
 }
 
+type BasicInfoRequest = {
+  readonly fileId: string
+  readonly pageId?: string
+}
+
+function isShotTarget(target: ArtboardTarget | BasicInfoRequest): target is ArtboardTarget {
+  return "nodeId" in target
+}
+
 function toolArguments(
   name: PluginTool,
-  target: ArtboardTarget | null,
-): { readonly limit: 200 } | { readonly fileId: string; readonly nodeId: string } {
+  target: ArtboardTarget | BasicInfoRequest | null,
+):
+  | { readonly limit: 200 }
+  | { readonly fileId: string; readonly nodeId: string }
+  | { readonly fileId: string; readonly pageId?: string } {
   switch (name) {
     case "list_resources":
       return { limit: 200 }
     case "get_screenshot":
-      if (target === null) throw new Fail("bad-payload")
+      if (target === null || !isShotTarget(target)) throw new Fail("bad-payload")
       return { fileId: target.fileId, nodeId: target.nodeId }
+    case "get_basic_info":
+      if (target === null || isShotTarget(target)) throw new Fail("bad-payload")
+      if (target.pageId !== undefined) return { fileId: target.fileId, pageId: target.pageId }
+      return { fileId: target.fileId }
   }
 }
 
 async function postTool(
   source: PaperSource,
   name: PluginTool,
-  target: ArtboardTarget | null,
+  target: ArtboardTarget | BasicInfoRequest | null,
 ): Promise<unknown> {
   const backend = backendOf(source)
   if (backend.kind === "script") {
     if (name === "list_resources") return backend.script.listResources()
-    if (target === null || backend.script.screenshot === undefined) throw new Fail("paper-down")
+    if (name === "get_basic_info") {
+      if (backend.script.basicInfo === undefined || target === null || isShotTarget(target)) {
+        throw new Fail("paper-down")
+      }
+      return backend.script.basicInfo({ fileId: target.fileId, pageId: target.pageId })
+    }
+    if (target === null || !isShotTarget(target) || backend.script.screenshot === undefined) {
+      throw new Fail("paper-down")
+    }
     return backend.script.screenshot({ fileId: target.fileId, nodeId: target.nodeId })
   }
   if (backend.sessionId === null) {
@@ -393,11 +513,21 @@ function parseWireResource(item: unknown): ProjectResource | Fail {
   if (item.type !== "file") return new Fail("bad-payload")
   const id = parseFileId(item.id)
   if (id === null) return new Fail("bad-payload")
+  const folder = folderOf(item)
+  if (folder instanceof Fail) return folder
   if (item.open === true) {
-    return { kind: "open-file", id, name: item.name, active: item.active === true }
+    return { kind: "open-file", id, name: item.name, folder, active: item.active === true }
   }
   if (item.active === true) return new Fail("bad-payload")
-  return { kind: "closed-file", id, name: item.name }
+  return { kind: "closed-file", id, name: item.name, folder }
+}
+
+function folderOf(item: Record<string, unknown>): FolderId | null | Fail {
+  if (item.parentId === undefined || item.parentId === null) return null
+  if (typeof item.parentId !== "string") return new Fail("bad-payload")
+  const id = parseFolderId(item.parentId)
+  if (id === null) return new Fail("bad-payload")
+  return id
 }
 
 function jpegFromToolResult(raw: unknown): Frame | Fail {
@@ -481,10 +611,20 @@ async function storedShot(
 }
 
 async function storeShot(dir: string, target: ArtboardTarget, frame: Frame): Promise<void> {
+  const placed = await findCachedArtboard(dir, target)
   await commitFile(shotJpegPath(dir, target), frame.bytes)
   await commitFile(
     shotSidecarPath(dir, target),
-    textBytes(JSON.stringify({ note: frame.note, byteLength: frame.bytes.byteLength })),
+    textBytes(
+      JSON.stringify({
+        name: placed === null ? null : placed.name,
+        file: target.fileId,
+        page: placed === null ? null : placed.page,
+        timestamp: new Date().toISOString(),
+        note: frame.note,
+        byteLength: frame.bytes.byteLength,
+      }),
+    ),
   )
 }
 
@@ -528,15 +668,200 @@ function parseStoredResource(item: unknown): ProjectResource | null {
     if (id === null) return null
     return { kind: "folder", id, name: item.name }
   }
+  const folder = storedFolder(item)
+  if (folder === "bad") return null
   if (item.kind === "open-file") {
     const id = parseFileId(item.id)
     if (id === null || typeof item.active !== "boolean") return null
-    return { kind: "open-file", id, name: item.name, active: item.active }
+    return { kind: "open-file", id, name: item.name, folder, active: item.active }
   }
   if (item.kind === "closed-file") {
     const id = parseFileId(item.id)
     if (id === null) return null
-    return { kind: "closed-file", id, name: item.name }
+    return { kind: "closed-file", id, name: item.name, folder }
+  }
+  return null
+}
+
+function storedFolder(item: Record<string, unknown>): FolderId | null | "bad" {
+  if (item.folder === undefined || item.folder === null) return null
+  if (typeof item.folder !== "string") return "bad"
+  const id = parseFolderId(item.folder)
+  if (id === null) return "bad"
+  return id
+}
+
+function pagesPath(dir: string, fileId: FileId): string {
+  return join(dir, "pages", `${fileId}.json`)
+}
+
+function artboardsPath(dir: string, fileId: FileId, pageId: PageId): string {
+  return join(dir, "artboards", fileId, `${pageId}.json`)
+}
+
+async function readPageCatalog(dir: string, fileId: FileId): Promise<PageCatalog | null> {
+  try {
+    const parsed = JSON.parse(await readFile(pagesPath(dir, fileId), "utf8")) as unknown
+    if (!isPageCatalog(parsed, fileId)) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+async function readArtboardCatalog(
+  dir: string,
+  fileId: FileId,
+  pageId: PageId,
+): Promise<ArtboardCatalog | null> {
+  try {
+    const parsed = JSON.parse(await readFile(artboardsPath(dir, fileId, pageId), "utf8")) as unknown
+    if (!isArtboardCatalog(parsed, fileId, pageId)) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function isPageCatalog(value: unknown, fileId: FileId): value is PageCatalog {
+  if (!isRecord(value) || value.fileId !== fileId || !Array.isArray(value.pages)) return false
+  return value.pages.every((item, index) => {
+    if (!isRecord(item) || typeof item.id !== "string" || typeof item.name !== "string") return false
+    if (item.name.length === 0 || parsePageId(item.id) === null) return false
+    return item.order === index
+  })
+}
+
+function isArtboardCatalog(value: unknown, fileId: FileId, pageId: PageId): value is ArtboardCatalog {
+  if (!isRecord(value) || value.fileId !== fileId || value.pageId !== pageId) return false
+  if (!Array.isArray(value.artboards)) return false
+  return value.artboards.every((item) => {
+    if (!isRecord(item) || typeof item.id !== "string" || typeof item.name !== "string") return false
+    if (item.name.length === 0 || parseNodeId(item.id) === null) return false
+    return item.width === null || (typeof item.width === "number" && Number.isFinite(item.width) && item.width > 0)
+  })
+}
+
+function jsonBlocks(raw: unknown): unknown[] | Fail {
+  if (!isRecord(raw) || raw.isError === true || !Array.isArray(raw.content)) return new Fail("bad-payload")
+  const found: unknown[] = []
+  for (const block of raw.content) {
+    if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") continue
+    try {
+      found.push(JSON.parse(block.text) as unknown)
+    } catch {
+      continue
+    }
+  }
+  return found
+}
+
+function parsePageCatalog(fileId: FileId, raw: unknown): PageCatalog | Fail {
+  const blocks = jsonBlocks(raw)
+  if (blocks instanceof Fail) return blocks
+  let pagesRaw: unknown[] | null = null
+  for (const block of blocks) {
+    if (isRecord(block) && Array.isArray(block.pages)) pagesRaw = block.pages
+  }
+  if (pagesRaw === null) return new Fail("bad-payload")
+  const pages: CachedPage[] = []
+  const seen = new Set<string>()
+  for (const item of pagesRaw) {
+    if (!isRecord(item) || item.type === "divider") continue
+    if (item.type !== "page" || typeof item.id !== "string" || typeof item.name !== "string") {
+      return new Fail("bad-payload")
+    }
+    if (item.name.length === 0) return new Fail("bad-payload")
+    const id = parsePageId(item.id)
+    if (id === null || seen.has(id)) return new Fail("bad-payload")
+    seen.add(id)
+    pages.push({ id, name: item.name, order: pages.length })
+  }
+  return { fileId, pages }
+}
+
+function parseArtboardCatalog(fileId: FileId, pageId: PageId, raw: unknown): ArtboardCatalog | Fail {
+  const blocks = jsonBlocks(raw)
+  if (blocks instanceof Fail) return blocks
+  let body: Record<string, unknown> | null = null
+  for (const block of blocks) {
+    if (isRecord(block) && Array.isArray(block.artboards)) body = block
+  }
+  if (body === null) return new Fail("bad-payload")
+  if (typeof body.pageId === "string" && body.pageId !== pageId) return new Fail("bad-payload")
+  const artboards: CachedArtboard[] = []
+  const seen = new Set<string>()
+  const items = body.artboards
+  if (!Array.isArray(items)) return new Fail("bad-payload")
+  for (const item of items) {
+    if (!isRecord(item) || typeof item.id !== "string" || typeof item.name !== "string") {
+      return new Fail("bad-payload")
+    }
+    if (item.name.length === 0) return new Fail("bad-payload")
+    const id = parseNodeId(item.id)
+    if (id === null || seen.has(id)) return new Fail("bad-payload")
+    seen.add(id)
+    if (item.width === null || item.width === undefined) {
+      artboards.push({ id, name: item.name, width: null })
+      continue
+    }
+    if (typeof item.width !== "number" || !Number.isFinite(item.width) || item.width <= 0) {
+      return new Fail("bad-payload")
+    }
+    artboards.push({ id, name: item.name, width: item.width })
+  }
+  return { fileId, pageId, artboards }
+}
+
+async function fillMissingWidths(
+  source: PaperSource,
+  catalog: ArtboardCatalog,
+): Promise<ArtboardCatalog | Fail> {
+  const artboards: CachedArtboard[] = []
+  for (const artboard of catalog.artboards) {
+    if (artboard.width !== null) {
+      artboards.push(artboard)
+      continue
+    }
+    let raw: unknown
+    try {
+      raw = await postTool(source, "get_screenshot", { fileId: catalog.fileId, nodeId: artboard.id })
+    } catch (err) {
+      if (err instanceof Fail && err.reason === "bad-payload") return err
+      return new Fail("paper-down")
+    }
+    const frame = jpegFromToolResult(raw)
+    if (frame instanceof Fail) return frame
+    artboards.push({ id: artboard.id, name: artboard.name, width: frame.width })
+  }
+  return { fileId: catalog.fileId, pageId: catalog.pageId, artboards }
+}
+
+async function findCachedArtboard(
+  dir: string,
+  target: ArtboardTarget,
+): Promise<{ readonly name: string; readonly page: string } | null> {
+  let names: string[]
+  try {
+    names = await readdir(join(dir, "artboards", target.fileId))
+  } catch {
+    return null
+  }
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(await readFile(join(dir, "artboards", target.fileId, name), "utf8")) as unknown
+    } catch {
+      continue
+    }
+    if (!isRecord(parsed) || typeof parsed.pageId !== "string" || !Array.isArray(parsed.artboards)) {
+      continue
+    }
+    for (const item of parsed.artboards) {
+      if (!isRecord(item) || item.id !== target.nodeId || typeof item.name !== "string") continue
+      return { name: item.name, page: parsed.pageId }
+    }
   }
   return null
 }
@@ -581,9 +906,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-async function main(argv: readonly string[]): Promise<0 | 2 | 3> {
-  if (argv.length === 1 && argv[0] === "projects") {
-    const result = await listProjects(livePaper())
+type Command =
+  | { readonly kind: "projects" }
+  | { readonly kind: "pages"; readonly fileId: FileId; readonly refresh: boolean }
+  | {
+      readonly kind: "artboards"
+      readonly fileId: FileId
+      readonly pageId: PageId
+      readonly refresh: boolean
+    }
+  | { readonly kind: "shot"; readonly fileId: FileId; readonly nodeId: NodeId }
+
+export async function run(argv: readonly string[], source: PaperSource): Promise<0 | 2 | 3> {
+  const command = parseCommand(argv)
+  if (command === "bad-args" || command === "bad-id") {
+    process.stderr.write(`${command}\n`)
+    return 3
+  }
+  if (command.kind === "projects") {
+    const result = await listProjects(source)
     process.stdout.write(`${JSON.stringify(result)}\n`)
     if (result.kind === "unavailable") {
       process.stderr.write(`${result.reason}\n`)
@@ -591,29 +932,96 @@ async function main(argv: readonly string[]): Promise<0 | 2 | 3> {
     }
     return 0
   }
-  if (argv[0] === "shot" && argv.length === 5) {
+  if (command.kind === "shot") {
+    const result = await fetchArtboard(source, { fileId: command.fileId, nodeId: command.nodeId })
+    process.stdout.write(`${JSON.stringify(result)}\n`)
+    if (result.kind === "unavailable") {
+      process.stderr.write(`${result.reason}\n`)
+      return 2
+    }
+    return 0
+  }
+  if (command.kind === "pages") {
+    return finishCatalog(await listPages(source, command.fileId, command.refresh))
+  }
+  return finishCatalog(
+    await listArtboards(source, command.fileId, command.pageId, command.refresh),
+  )
+}
+
+function finishCatalog(result: PageResult | ArtboardCatalogResult): 0 | 2 {
+  process.stdout.write(`${JSON.stringify(result)}\n`)
+  if (result.kind === "unavailable") {
+    process.stderr.write(`${result.reason}\n`)
+    return 2
+  }
+  return 0
+}
+
+function parseCommand(argv: readonly string[]): Command | "bad-args" | "bad-id" {
+  if (argv.length === 1 && argv[0] === "projects") return { kind: "projects" }
+  if (argv[0] === "pages") return parsePages(argv)
+  if (argv[0] === "artboards") return parseArtboards(argv)
+  if (argv[0] === "shot") return parseShot(argv)
+  return "bad-args"
+}
+
+function parsePages(argv: readonly string[]): Command | "bad-args" | "bad-id" {
+  const split = splitRefresh(argv)
+  if (split === "bad-args" || split.args.length !== 1) return "bad-args"
+  const fileId = parseFileId(split.args[0]!)
+  if (fileId === null) return "bad-id"
+  return { kind: "pages", fileId, refresh: split.refresh }
+}
+
+function parseArtboards(argv: readonly string[]): Command | "bad-args" | "bad-id" {
+  const split = splitRefresh(argv)
+  if (split === "bad-args" || split.args.length !== 2) return "bad-args"
+  const fileId = parseFileId(split.args[0]!)
+  const pageId = parsePageId(split.args[1]!)
+  if (fileId === null || pageId === null) return "bad-id"
+  return { kind: "artboards", fileId, pageId, refresh: split.refresh }
+}
+
+function parseShot(argv: readonly string[]): Command | "bad-args" | "bad-id" {
+  if (argv.length === 3 && !argv[1]!.startsWith("-") && !argv[2]!.startsWith("-")) {
+    return shotCommand(argv[1]!, argv[2]!)
+  }
+  if (argv.length === 5) {
     const fileRaw = flagValue(argv, "--file")
     const nodeRaw = flagValue(argv, "--node")
-    if (fileRaw === null || nodeRaw === null) {
-      process.stderr.write("bad-args\n")
-      return 3
-    }
-    const fileId = parseFileId(fileRaw)
-    const nodeId = parseNodeId(nodeRaw)
-    if (fileId === null || nodeId === null) {
-      process.stderr.write("bad-id\n")
-      return 3
-    }
-    const result = await fetchArtboard(livePaper(), { fileId, nodeId })
-    process.stdout.write(`${JSON.stringify(result)}\n`)
-    if (result.kind === "unavailable") {
-      process.stderr.write(`${result.reason}\n`)
-      return 2
-    }
-    return 0
+    if (fileRaw === null || nodeRaw === null) return "bad-args"
+    return shotCommand(fileRaw, nodeRaw)
   }
-  process.stderr.write("bad-args\n")
-  return 3
+  return "bad-args"
+}
+
+function shotCommand(fileRaw: string, nodeRaw: string): Command | "bad-id" {
+  const fileId = parseFileId(fileRaw)
+  const nodeId = parseNodeId(nodeRaw)
+  if (fileId === null || nodeId === null) return "bad-id"
+  return { kind: "shot", fileId, nodeId }
+}
+
+function splitRefresh(
+  argv: readonly string[],
+): { readonly args: readonly string[]; readonly refresh: boolean } | "bad-args" {
+  const args: string[] = []
+  let refresh = false
+  for (let i = 1; i < argv.length; i++) {
+    const token = argv[i]!
+    if (token === "--refresh") {
+      refresh = true
+      continue
+    }
+    if (token.startsWith("-")) return "bad-args"
+    args.push(token)
+  }
+  return { args, refresh }
+}
+
+async function main(argv: readonly string[]): Promise<0 | 2 | 3> {
+  return run(argv, livePaper())
 }
 
 function flagValue(argv: readonly string[], flag: string): string | null {

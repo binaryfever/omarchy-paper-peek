@@ -5,11 +5,15 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   fetchArtboard,
+  listArtboards,
+  listPages,
   listProjects,
   parseFileId,
   parseNodeId,
+  parsePageId,
   readArtboard,
   readProjects,
+  run,
   scriptedPaper,
   type ArtboardTarget,
 } from "./paper-fetch.ts"
@@ -62,19 +66,27 @@ function ids(): ArtboardTarget {
   return { fileId, nodeId }
 }
 
-function listPayload(open: boolean): unknown {
+function listPayload(open: boolean, parentId?: string): unknown {
+  const file = open
+    ? { id: FILE, name: "Audiol", type: "file", open: true, active: false }
+    : { id: FILE, name: "Audiol", type: "file" }
   return {
     content: [
       {
         type: "text",
         text: JSON.stringify({
-          resources: [
-            open
-              ? { id: FILE, name: "Audiol", type: "file", open: true, active: false }
-              : { id: FILE, name: "Audiol", type: "file" },
-          ],
+          resources: [parentId === undefined ? file : { ...file, parentId }],
         }),
       },
+    ],
+  }
+}
+
+function basicPayload(body: unknown): unknown {
+  return {
+    content: [
+      { type: "text", text: JSON.stringify({ file: { id: FILE, name: "Audiol" } }) },
+      { type: "text", text: JSON.stringify(body) },
     ],
   }
 }
@@ -87,7 +99,7 @@ function shotPayload(jpeg: Uint8Array, note: string | null): unknown {
   return { content }
 }
 
-async function run(): Promise<void> {
+async function runTests(): Promise<void> {
   const root = fileURLToPath(new URL("..", import.meta.url))
   const dir = await mkdtemp(join(tmpdir(), "paper-fetch-"))
   const jpeg = makeMinimalJpeg(8, 6)
@@ -213,7 +225,126 @@ async function run(): Promise<void> {
       assert(!text.includes("29979"), `${path} does not name the Paper port`)
       assert(!text.includes("list_resources"), `${path} does not name list_resources`)
       assert(!text.includes("get_screenshot"), `${path} does not name get_screenshot`)
+      assert(!text.includes("get_basic_info"), `${path} does not name get_basic_info`)
     }
+
+    const pageId = parsePageId("p-3-0")
+    assert(pageId !== null, "page id parses")
+    const catalogDir = await mkdtemp(join(tmpdir(), "paper-fetch-catalog-"))
+    let infoCalls = 0
+    let widthShots = 0
+    const catalog = scriptedPaper({
+      cacheDir: catalogDir,
+      listResources: () => listPayload(true, "01M3FSZV4GNV5WV4WPRBS76WRB"),
+      basicInfo: (asked) => {
+        infoCalls += 1
+        if (asked.pageId === undefined) {
+          return basicPayload({
+            pages: [
+              { type: "divider", id: "d-1", name: "Group" },
+              { type: "page", id: "p-3-0", name: "Screens" },
+              { type: "page", id: "p-1-0", name: "Page 1" },
+            ],
+          })
+        }
+        return basicPayload({
+          pageId: asked.pageId,
+          artboards: [
+            { id: NODE, name: "Tokens", width: null, height: null },
+            { id: "QPO-0", name: "Library", width: 2160, height: 400 },
+          ],
+        })
+      },
+      screenshot: () => {
+        widthShots += 1
+        return shotPayload(jpeg, null)
+      },
+    })
+    const pages = await listPages(catalog, target.fileId, false)
+    assert(pages.kind === "fresh", "first pages read writes the catalog")
+    if (pages.kind === "fresh") {
+      assert(pages.catalog.pages.length === 2, "dividers are not pages")
+      assert(pages.catalog.pages[0]?.order === 0 && pages.catalog.pages[0]?.name === "Screens", "order follows the page list")
+      assert(pages.catalog.pages[1]?.id === "p-1-0" && pages.catalog.pages[1]?.order === 1, "second page keeps its place")
+    }
+    const pagesAgain = await listPages(catalog, target.fileId, false)
+    assert(pagesAgain.kind === "cached", "a second pages read uses the file")
+    assert(infoCalls === 1, "a second pages read does not call Paper")
+    const pageBytes = await readFile(join(catalogDir, "pages", `${FILE}.json`))
+    const refreshed = await listPages(catalog, target.fileId, true)
+    assert(refreshed.kind === "fresh" && infoCalls === 2, "--refresh calls Paper again")
+    const downPages = scriptedPaper({
+      cacheDir: catalogDir,
+      listResources: () => {
+        throw new Error("connection refused")
+      },
+      basicInfo: () => {
+        throw new Error("connection refused")
+      },
+    })
+    const closedPages = await listPages(downPages, target.fileId, false)
+    assert(closedPages.kind === "cached", "Paper closed still serves a page cache without a call")
+    const sameBytes = await readFile(join(catalogDir, "pages", `${FILE}.json`))
+    assert(Buffer.from(pageBytes).equals(Buffer.from(sameBytes)), "Paper closed leaves the page file in place")
+    const beforeFailedRefresh = await readFile(join(catalogDir, "pages", `${FILE}.json`))
+    const refreshDown = await listPages(downPages, target.fileId, true)
+    assert(refreshDown.kind === "unavailable" && refreshDown.reason === "paper-down", "refresh reports Paper down")
+    const afterFailedRefresh = await readFile(join(catalogDir, "pages", `${FILE}.json`))
+    assert(
+      Buffer.from(beforeFailedRefresh).equals(Buffer.from(afterFailedRefresh)),
+      "a failed refresh leaves the page file",
+    )
+    const missingPages = await listPages(
+      scriptedPaper({
+        cacheDir: await mkdtemp(join(tmpdir(), "paper-fetch-pages-down-")),
+        listResources: () => {
+          throw new Error("connection refused")
+        },
+        basicInfo: () => {
+          throw new Error("connection refused")
+        },
+      }),
+      target.fileId,
+      false,
+    )
+    assert(missingPages.kind === "unavailable" && missingPages.reason === "paper-down", "pages with no cache exits unavailable when Paper is closed")
+
+    const boards = await listArtboards(catalog, target.fileId, pageId, false)
+    assert(boards.kind === "fresh", "first artboard read writes the catalog")
+    if (boards.kind === "fresh") {
+      assert(boards.catalog.artboards[0]?.name === "Tokens" && boards.catalog.artboards[0]?.width === 8, "a missing width comes from the JPEG")
+      assert(boards.catalog.artboards[1]?.width === 2160, "a measured width stays the Paper width")
+    }
+    assert(widthShots === 1, "only the unmeasured artboard is screenshotted")
+    const boardsAgain = await listArtboards(catalog, target.fileId, pageId, false)
+    assert(boardsAgain.kind === "cached" && widthShots === 1 && infoCalls === 3, "a second artboard read does not call Paper")
+
+    const shot = await fetchArtboard(catalog, target)
+    assert(shot.kind === "fresh", "an open file still screenshots")
+    const sidecar = JSON.parse(
+      await readFile(join(catalogDir, "shots", FILE, `${NODE}.json`), "utf8"),
+    ) as { name: string; file: string; page: string; timestamp: string }
+    assert(sidecar.name === "Tokens" && sidecar.file === FILE && sidecar.page === "p-3-0", "the shot record names the cached artboard")
+    assert(Number.isFinite(Date.parse(sidecar.timestamp)), "the shot record has a timestamp")
+
+    const withFolder = await listProjects(catalog)
+    assert(withFolder.kind === "fresh", "projects lists the scripted file")
+    if (withFolder.kind === "fresh") {
+      const file = withFolder.index.resources.find((item) => item.kind !== "folder" && item.id === FILE)
+      assert(file !== undefined && file.kind !== "folder" && file.folder === "01M3FSZV4GNV5WV4WPRBS76WRB", "a project records its folder")
+    }
+
+    const cli = scriptedPaper({
+      cacheDir: await mkdtemp(join(tmpdir(), "paper-fetch-cli-")),
+      listResources: () => listPayload(false),
+      basicInfo: () => {
+        throw new Error("pages must not call Paper when the cache is absent and we only check argv")
+      },
+    })
+    const badPage = await run(["pages", "../x"], cli)
+    assert(badPage === 3, "a path page id exits 3")
+    const positional = await run(["shot", FILE, NODE], catalog)
+    assert(positional === 0, "shot accepts a file id and a node id")
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -236,7 +367,7 @@ async function qmlFiles(root: string): Promise<string[]> {
   return found
 }
 
-run().catch((err) => {
+runTests().catch((err) => {
   console.error(err)
   process.exit(1)
 })
