@@ -13,6 +13,7 @@ Item {
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string statePath: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/paper-peek/current.json"
   readonly property string cacheDir: Quickshell.env("PAPER_PEEK_CACHE") || (home + "/.cache/paper-peek")
+  readonly property string absentCatalog: cacheDir + "/absent"
   readonly property int drawerWidth: 480
 
   property string fileId: ""
@@ -97,8 +98,10 @@ Item {
 
   function readNames() {
     projectName = nameFor(projectsFile.text(), "resources", fileId)
-    pageName = nameFor(pagesFile.text(), "pages", pageId)
-    artboardName = nameFor(artboardsFile.text(), "artboards", nodeId)
+    pageName = fileId === "" ? "" : nameFor(pagesFile.text(), "pages", pageId)
+    artboardName = fileId === "" || pageId === ""
+      ? ""
+      : nameFor(artboardsFile.text(), "artboards", nodeId)
   }
 
   ShellIpc {
@@ -139,7 +142,7 @@ Item {
 
   FileView {
     id: pagesFile
-    path: root.fileId === "" ? root.statePath : root.cacheDir + "/pages/" + root.fileId + ".json"
+    path: root.fileId === "" ? root.absentCatalog : root.cacheDir + "/pages/" + root.fileId + ".json"
     watchChanges: true
     blockLoading: true
     printErrors: false
@@ -150,7 +153,7 @@ Item {
   FileView {
     id: artboardsFile
     path: root.fileId === "" || root.pageId === ""
-      ? root.statePath
+      ? root.absentCatalog
       : root.cacheDir + "/artboards/" + root.fileId + "/" + root.pageId + ".json"
     watchChanges: true
     blockLoading: true
