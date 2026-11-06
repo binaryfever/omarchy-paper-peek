@@ -45,6 +45,7 @@ Item {
   readonly property int floatMinW: 180
   readonly property int floatMinH: 140
   property bool floated: false
+  property bool docked: false
   property bool passClicks: false
   property bool floatKnown: false
   property bool floatDragging: false
@@ -82,6 +83,7 @@ Item {
   }
 
   function open(payloadJson) {
+    if (docked) undock()
     floated = false
     stateFile.reload()
     readCurrent()
@@ -99,7 +101,7 @@ Item {
   }
 
   function watchArtboard() {
-    if (!opened || peekStatus !== "live") return
+    if ((!opened && !docked) || peekStatus !== "live") return
     if (fileId === "" || nodeId === "") return
     if (watchFetch.running || shotFetch.running) return
     watchFetch.command = [fetchScript, "watch", fileId, nodeId]
@@ -116,8 +118,46 @@ Item {
       floated = false
       return
     }
+    if (docked) {
+      undock()
+      return
+    }
     if (opened) close("")
     else open("")
+  }
+
+  function attachBody(toDock) {
+    var next = toDock ? dockPad : surface
+    if (!next) return
+    if (body.parent !== next) body.parent = next
+    body.anchors.fill = next
+    body.anchors.margins = Style.spacing.popupPadding
+  }
+
+  function dock(payloadJson) {
+    if (docked && dockWindow.visible) return
+    floated = false
+    opened = false
+    attachBody(true)
+    docked = true
+    dockWindow.visible = true
+    stateFile.reload()
+    readCurrent()
+    notice = ""
+    view = fileId !== "" && nodeId !== "" ? "shot" : "projects"
+    startCommand(["resolve"], "resolve")
+    Qt.callLater(function() {
+      if (!docked) return
+      if (view === "shot") flick.forceActiveFocus()
+      else browserFlick.forceActiveFocus()
+    })
+  }
+
+  function undock() {
+    if (!docked && !dockWindow.visible) return
+    attachBody(false)
+    docked = false
+    dockWindow.visible = false
   }
 
   function screenSize() {
@@ -270,6 +310,7 @@ Item {
   }
 
   function enterFloat() {
+    if (docked) undock()
     if (!floatKnown) placeDefault()
     opened = false
     floated = true
@@ -367,7 +408,7 @@ Item {
   function finishCommand(text) {
     var name = root.pending
     root.pending = ""
-    if (!root.opened) return
+    if (!root.opened && !root.docked) return
     var parsed = null
     try {
       parsed = JSON.parse(String(text || ""))
@@ -440,7 +481,8 @@ Item {
       root.notice = ""
       return
     }
-    root.close("")
+    if (root.docked) root.undock()
+    else root.close("")
   }
 
   function back() {
@@ -589,6 +631,14 @@ Item {
       root.togglePassClicks()
       return root.passClicks ? "on" : "off"
     }
+    function dock(): string {
+      root.dock("")
+      return "open"
+    }
+    function undock(): string {
+      root.undock()
+      return "closed"
+    }
   }
 
   Timer {
@@ -602,7 +652,7 @@ Item {
   Timer {
     interval: 2000
     repeat: true
-    running: root.opened && root.peekStatus === "live" && root.fileId !== "" && root.nodeId !== ""
+    running: (root.opened || root.docked) && root.peekStatus === "live" && root.fileId !== "" && root.nodeId !== ""
     onTriggered: root.watchArtboard()
   }
 
@@ -613,7 +663,7 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        if (!root.opened) return
+        if (!root.opened && !root.docked) return
         if (String(text || "").trim() === "changed") root.refreshShot()
       }
     }
@@ -822,7 +872,7 @@ Item {
           anchors.bottom: parent.bottom
           anchors.bottomMargin: root.peekStatus === "not-live" ? notLive.implicitHeight + Style.spacing.sm : 0
           clip: true
-          focus: root.opened && root.view !== "shot"
+          focus: (root.opened || root.docked) && root.view !== "shot"
           boundsBehavior: Flickable.StopAtBounds
           contentWidth: width
           contentHeight: browserCol.height
@@ -890,26 +940,27 @@ Item {
           anchors.bottom: parent.bottom
           anchors.bottomMargin: root.peekStatus === "not-live" ? notLive.implicitHeight + Style.spacing.sm : 0
           clip: true
-          focus: root.opened && root.view === "shot"
+          focus: (root.opened || root.docked) && root.view === "shot"
           boundsBehavior: Flickable.StopAtBounds
           contentWidth: width
           contentHeight: shot.height
           interactive: contentHeight > height
           Keys.onPressed: function(event) {
             if (event.key === Qt.Key_Escape) {
-              root.close("")
+              if (root.docked) root.undock()
+              else root.close("")
               event.accepted = true
               return
             }
             if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
               root.showBrowser()
               event.accepted = true
+              return
             }
-          }
-          Keys.onPressed: function(event) {
-            if (event.key !== Qt.Key_F) return
-            root.enterFloat()
-            event.accepted = true
+            if (event.key === Qt.Key_F) {
+              root.enterFloat()
+              event.accepted = true
+            }
           }
 
           Image {
@@ -921,7 +972,7 @@ Item {
             horizontalAlignment: Image.AlignLeft
             verticalAlignment: Image.AlignTop
             source: root.shotSource
-            sourceSize.width: Math.max(1, Math.round(width * (window.devicePixelRatio || 1)))
+            sourceSize.width: Math.max(1, Math.round(width * ((root.docked ? dockWindow.devicePixelRatio : window.devicePixelRatio) || 1)))
             height: implicitWidth > 0 ? width * implicitHeight / implicitWidth : 0
           }
         }
@@ -929,7 +980,7 @@ Item {
         Text {
           anchors.top: noticeText.bottom
           anchors.topMargin: Style.spacing.sm
-          visible: root.view === "shot" && root.opened && (root.imagePath === "" || shot.status === Image.Error || shot.status === Image.Null)
+          visible: root.view === "shot" && (root.opened || root.docked) && (root.imagePath === "" || shot.status === Image.Error || shot.status === Image.Null)
           text: "No cached artboard"
           textFormat: Text.PlainText
           color: Commons.Color.popups.text
@@ -1174,6 +1225,26 @@ Item {
           root.finishFloatSize()
         }
       }
+    }
+  }
+
+  FloatingWindow {
+    id: dockWindow
+    title: "Paper Peek"
+    visible: false
+    color: Commons.Color.popups.background
+    implicitWidth: 960
+    implicitHeight: 800
+    minimumSize: Qt.size(360, 280)
+
+    Item {
+      id: dockPad
+      anchors.fill: parent
+    }
+
+    onVisibleChanged: {
+      if (visible || !root.docked) return
+      root.undock()
     }
   }
 }
