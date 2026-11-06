@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process"
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -20,6 +20,7 @@ import {
   scriptedPaper,
   type ArtboardTarget,
 } from "./paper-fetch.ts"
+import { projectRows } from "./peek-memory.ts"
 
 function pushSegment(out: number[], marker: number, payload: number[]): void {
   out.push(0xff, marker)
@@ -502,6 +503,7 @@ async function runTests(): Promise<void> {
     )
     await rm(watchDir, { recursive: true, force: true })
     await rm(blindDir, { recursive: true, force: true })
+    await memoryTests()
   } finally {
     if (previousLog === undefined) delete process.env.PAPER_PEEK_LOG
     else process.env.PAPER_PEEK_LOG = previousLog
@@ -509,6 +511,282 @@ async function runTests(): Promise<void> {
   }
 
   console.log("paper-fetch.test.ts: ok")
+}
+
+const FILE_B = "01M3FYEHC2WZ9YC2DC3AJMX995"
+const NODE_B = "1-0"
+const PAGE = "p-1-0"
+const FOLDER_A = "01M3FSZV4GNV5WV4WPRBS76WRB"
+const FOLDER_B = "01M3STUDIOFOLDER0000000001"
+
+function storedProjects(): string {
+  return JSON.stringify({
+    truncated: false,
+    resources: [
+      { kind: "folder", id: FOLDER_A, name: "Client" },
+      { kind: "folder", id: FOLDER_B, name: "Studio" },
+      { kind: "open-file", id: FILE, name: "Audiol", folder: FOLDER_A, active: false },
+      { kind: "closed-file", id: FILE_B, name: "Site", folder: FOLDER_B },
+    ],
+  })
+}
+
+function pageFile(fileId: string, pageName: string): string {
+  return JSON.stringify({ fileId, pages: [{ id: PAGE, name: pageName, order: 0 }] })
+}
+
+function artboardFile(fileId: string, nodeId: string, name: string): string {
+  return JSON.stringify({
+    fileId,
+    pageId: PAGE,
+    artboards: [{ id: nodeId, name, width: 8 }],
+  })
+}
+
+function wireFiles(openA: boolean, openB: boolean, includeB: boolean, truncated: boolean): unknown {
+  const resources: Record<string, unknown>[] = [
+    { id: FOLDER_A, name: "Client", type: "folder" },
+    { id: FOLDER_B, name: "Studio", type: "folder" },
+  ]
+  const fileA: Record<string, unknown> = { id: FILE, name: "Audiol", type: "file", parentId: FOLDER_A }
+  if (openA) {
+    fileA.open = true
+    fileA.active = false
+  }
+  resources.push(fileA)
+  if (includeB) {
+    const fileB: Record<string, unknown> = { id: FILE_B, name: "Site", type: "file", parentId: FOLDER_B }
+    if (openB) {
+      fileB.open = true
+      fileB.active = false
+    }
+    resources.push(fileB)
+  }
+  return {
+    content: [{ type: "text", text: JSON.stringify({ truncated, resources }) }],
+  }
+}
+
+async function capture(
+  argv: readonly string[],
+  source: Parameters<typeof run>[1],
+): Promise<{ readonly code: 0 | 2 | 3; readonly stdout: string }> {
+  const chunks: string[] = []
+  const write = process.stdout.write.bind(process.stdout)
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"))
+    return true
+  }) as typeof process.stdout.write
+  try {
+    const code = await run(argv, source)
+    return { code, stdout: chunks.join("") }
+  } finally {
+    process.stdout.write = write
+  }
+}
+
+type SavedMemory = {
+  fileId: string
+  pageId: string
+  nodeId: string
+  projectName: string
+  artboardName: string
+  byFile: Record<string, { nodeId: string; artboardName: string }>
+  recent: { fileId: string; nodeId: string; artboardName: string; projectName: string }[]
+}
+
+async function memoryTests(): Promise<void> {
+  const stateDir = await mkdtemp(join(tmpdir(), "paper-peek-state-"))
+  const cacheDir = await mkdtemp(join(tmpdir(), "paper-peek-cache-"))
+  const statePath = join(stateDir, "current.json")
+  const previousState = process.env.PAPER_PEEK_STATE
+  const previousCache = process.env.PAPER_PEEK_CACHE
+  process.env.PAPER_PEEK_STATE = statePath
+  process.env.PAPER_PEEK_CACHE = cacheDir
+  let listCalls = 0
+  let infoCalls = 0
+  let openA = true
+  let openB = true
+  let includeB = true
+  let truncated = false
+  let hideNode = ""
+  const source = scriptedPaper({
+    cacheDir,
+    listResources: () => {
+      listCalls += 1
+      return wireFiles(openA, openB, includeB, truncated)
+    },
+    basicInfo: (asked) => {
+      infoCalls += 1
+      const nodeId = asked.fileId === FILE ? NODE : NODE_B
+      const name = asked.fileId === FILE ? "Tokens" : "Home"
+      const artboards = hideNode === nodeId ? [] : [{ id: nodeId, name, width: 8 }]
+      return basicPayload({ pageId: asked.pageId, artboards })
+    },
+  })
+  try {
+    await mkdir(join(cacheDir, "pages"), { recursive: true })
+    await mkdir(join(cacheDir, "artboards", FILE), { recursive: true })
+    await mkdir(join(cacheDir, "artboards", FILE_B), { recursive: true })
+    await writeFile(join(cacheDir, "projects.json"), storedProjects())
+    await writeFile(join(cacheDir, "pages", `${FILE}.json`), pageFile(FILE, "Page 1"))
+    await writeFile(join(cacheDir, "pages", `${FILE_B}.json`), pageFile(FILE_B, "Cover"))
+    await writeFile(join(cacheDir, "artboards", FILE, `${PAGE}.json`), artboardFile(FILE, NODE, "Tokens"))
+    await writeFile(
+      join(cacheDir, "artboards", FILE_B, `${PAGE}.json`),
+      artboardFile(FILE_B, NODE_B, "Home"),
+    )
+
+    assert((await run(["remember", FILE, PAGE, NODE], source)) === 0, "remember writes the first artboard")
+    assert((await run(["remember", FILE_B, PAGE, NODE_B], source)) === 0, "remember writes the second project")
+    const saved = JSON.parse(await readFile(statePath, "utf8")) as SavedMemory
+    assert(saved.fileId === FILE_B && saved.artboardName === "Home", "the newest artboard is current")
+    assert(saved.projectName === "Site", "the current project name comes from the cache")
+    assert(saved.byFile[FILE]?.artboardName === "Tokens", "the first project keeps its artboard")
+    assert(saved.byFile[FILE_B]?.nodeId === NODE_B, "the second project keeps its artboard")
+    assert(
+      saved.recent.map((item) => `${item.projectName}:${item.artboardName}`).join(",") === "Site:Home,Audiol:Tokens",
+      "recent artboards are newest first",
+    )
+
+    assert((await run(["remember", FILE, PAGE, NODE], source)) === 0, "remembering the first artboard again is accepted")
+    const returned = JSON.parse(await readFile(statePath, "utf8")) as SavedMemory
+    assert(returned.fileId === FILE && returned.artboardName === "Tokens", "returning to the first project restores its artboard")
+    assert(returned.recent.length === 2, "a repeated artboard does not grow the recent list")
+    assert(
+      returned.recent[0]?.fileId === FILE && returned.recent[1]?.fileId === FILE_B,
+      "the repeated artboard moves to the front",
+    )
+    const stable = await readFile(statePath, "utf8")
+    assert((await run(["remember", FILE, PAGE, NODE], source)) === 0, "remembering the current artboard again is accepted")
+    assert((await readFile(statePath, "utf8")) === stable, "remembering the current artboard again writes the same file")
+
+    listCalls = 0
+    infoCalls = 0
+    const listed = await capture(["browser", "projects"], source)
+    assert(listed.code === 0 && listCalls === 0 && infoCalls === 0, "a cached project list does not call Paper")
+    const rows = JSON.parse(listed.stdout) as { rows: { kind: string; label: string; fileId?: string }[] }
+    assert(rows.rows[0]?.kind === "header" && rows.rows[0]?.label === "Recent", "recent artboards sit at the top")
+    assert(rows.rows[1]?.kind === "recent" && rows.rows[1]?.label === "Tokens", "the newest recent row is the current artboard")
+    assert(rows.rows.some((row) => row.kind === "header" && row.label === "Client"), "projects are grouped by folder")
+    assert(rows.rows.some((row) => row.kind === "project" && row.label === "Audiol"), "a file is a project row")
+    assert(!rows.rows.some((row) => row.label === "Client" && row.kind === "project"), "a folder is not a project")
+    const projectLabels = rows.rows.filter((row) => row.kind === "header" && row.label !== "Recent" && row.label !== "Projects").map((row) => row.label)
+    assert(projectLabels.join(",") === "Client,Studio", "folder groups are alphabetical")
+
+    const resolved = await capture(["resolve"], source)
+    assert(resolved.code === 0 && resolved.stdout === '{"kind":"shot"}\n', "an artboard that is still in Paper opens")
+    assert(infoCalls === 1, "an open file is checked with the page catalog")
+    const back = await capture(["resolve-project", FILE_B], source)
+    assert(back.code === 0 && back.stdout === '{"kind":"shot"}\n', "switching back opens that project's artboard")
+    const restored = JSON.parse(await readFile(statePath, "utf8")) as SavedMemory
+    assert(restored.fileId === FILE_B && restored.artboardName === "Home", "switching back makes that artboard current")
+    assert(restored.recent[0]?.fileId === FILE_B, "switching back moves that artboard to the front of recent")
+
+    openA = false
+    infoCalls = 0
+    await writeFile(statePath, stable)
+    const closed = await capture(["resolve"], source)
+    assert(closed.code === 0 && closed.stdout === '{"kind":"shot"}\n', "a closed file keeps the cached artboard")
+    assert(infoCalls === 0, "a closed file is not opened to check the artboard")
+    openA = true
+
+    hideNode = NODE
+    const gone = await capture(["resolve"], source)
+    assert(gone.code === 0, "a deleted artboard does not fail the command")
+    assert(
+      gone.stdout === '{"kind":"projects","notice":"That artboard is gone."}\n',
+      "a deleted artboard opens the browser with a short message",
+    )
+    const forgotten = JSON.parse(await readFile(statePath, "utf8")) as SavedMemory
+    assert(forgotten.fileId === "" && forgotten.byFile[FILE] === undefined, "a deleted artboard is dropped")
+    assert(forgotten.byFile[FILE_B]?.artboardName === "Home", "another project's artboard stays")
+    hideNode = ""
+
+    await writeFile(statePath, stable)
+    includeB = false
+    truncated = false
+    const missingFile = await capture(["resolve-project", FILE_B], source)
+    assert(
+      missingFile.stdout === '{"kind":"projects","notice":"That artboard is gone."}\n',
+      "a deleted project opens the browser",
+    )
+    assert((await run(["remember", FILE_B, PAGE, NODE_B], source)) === 0, "remember the second artboard before the truncated list")
+    includeB = false
+    truncated = true
+    const unsure = await capture(["resolve"], source)
+    assert(unsure.stdout === '{"kind":"shot"}\n', "a truncated project list does not drop the artboard")
+    truncated = false
+    includeB = true
+
+    listCalls = 0
+    const down = scriptedPaper({
+      cacheDir,
+      listResources: () => {
+        throw new Error("connection refused")
+      },
+      basicInfo: () => {
+        throw new Error("connection refused")
+      },
+    })
+    await writeFile(statePath, stable)
+    const offline = await capture(["resolve"], down)
+    assert(offline.stdout === '{"kind":"shot"}\n', "Paper down still opens the cached artboard")
+    assert((await readFile(statePath, "utf8")) === stable, "Paper down leaves the remembered artboard in place")
+
+    const fresh = await capture(["resolve-project", "01M3OTHERFILE00000000000001"], source)
+    assert(
+      fresh.stdout === '{"kind":"pages","fileId":"01M3OTHERFILE00000000000001","notice":""}\n',
+      "a project with no memory opens its pages",
+    )
+    const infoBeforePages = infoCalls
+    const pages = await capture(["browser", "pages", FILE], source)
+    assert(pages.code === 0 && infoCalls === infoBeforePages, "cached pages do not call Paper")
+    const pageRows = JSON.parse(pages.stdout) as { rows: { kind: string; label: string }[] }
+    assert(pageRows.rows[0]?.kind === "page" && pageRows.rows[0]?.label === "Page 1", "cached pages keep Paper's names")
+
+    await rm(statePath, { force: true })
+    const empty = await capture(["resolve"], down)
+    assert(empty.stdout === '{"kind":"projects","notice":""}\n', "no remembered artboard opens the browser")
+
+    const legacy = JSON.stringify({ fileId: FILE, pageId: PAGE, nodeId: NODE })
+    await writeFile(statePath, legacy)
+    openA = true
+    hideNode = ""
+    const migrated = await capture(["browser", "projects"], source)
+    const legacyRows = JSON.parse(migrated.stdout) as { rows: { kind: string; label: string }[] }
+    assert(
+      legacyRows.rows.some((row) => row.kind === "recent" && row.label === NODE),
+      "an older state file still contributes one recent artboard",
+    )
+    assert((await readFile(statePath, "utf8")) === legacy, "reading recent artboards does not rewrite the state file")
+
+    await rm(statePath, { force: true })
+    for (let i = 1; i <= 6; i++) {
+      const nodeId = `n-${i}`
+      assert((await run(["remember", FILE, PAGE, nodeId], source)) === 0, "remember accepts six artboards")
+    }
+    const capped = JSON.parse(await readFile(statePath, "utf8")) as SavedMemory
+    assert(capped.recent.length === 5, "recent keeps five artboards")
+    assert(capped.recent[0]?.nodeId === "n-6", "the newest of six stays first")
+    assert(!capped.recent.some((item) => item.nodeId === "n-1"), "the oldest artboard drops off the recent list")
+    assert((await run(["remember", "../x", PAGE, NODE], source)) === 3, "a path id is rejected")
+    const folded = projectRows(
+      [{ id: FILE, name: "Site", folderId: FOLDER_A, folderName: "Projects" }],
+      { current: null, byFile: {}, recent: [] },
+    )
+    assert(
+      folded.filter((row) => row.kind === "header").map((row) => row.label).join(",") === "Projects",
+      "a folder named Projects is listed once",
+    )
+  } finally {
+    if (previousState === undefined) delete process.env.PAPER_PEEK_STATE
+    else process.env.PAPER_PEEK_STATE = previousState
+    if (previousCache === undefined) delete process.env.PAPER_PEEK_CACHE
+    else process.env.PAPER_PEEK_CACHE = previousCache
+    await rm(stateDir, { recursive: true, force: true })
+    await rm(cacheDir, { recursive: true, force: true })
+  }
 }
 
 async function qmlFiles(root: string): Promise<string[]> {
