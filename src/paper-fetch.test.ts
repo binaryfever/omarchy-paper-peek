@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process"
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
+  artboardChosen,
   fetchArtboard,
   listArtboards,
   listPages,
@@ -11,8 +12,10 @@ import {
   parseFileId,
   parseNodeId,
   parsePageId,
+  peekStatus,
   readArtboard,
   readProjects,
+  reportStatus,
   run,
   scriptedPaper,
   type ArtboardTarget,
@@ -345,6 +348,68 @@ async function runTests(): Promise<void> {
     assert(badPage === 3, "a path page id exits 3")
     const positional = await run(["shot", FILE, NODE], catalog)
     assert(positional === 0, "shot accepts a file id and a node id")
+
+    assert(peekStatus(true, true) === "live", "Paper up with an artboard is live")
+    assert(peekStatus(false, true) === "not-live", "Paper down with an artboard is not live")
+    assert(peekStatus(true, false) === "off", "no artboard is off even when Paper is up")
+    assert(peekStatus(false, false) === "off", "no artboard is off when Paper is down")
+    const chosen = JSON.stringify({ fileId: FILE, pageId: "p-1-0", nodeId: NODE })
+    assert(artboardChosen(chosen), "a current artboard counts as chosen")
+    assert(!artboardChosen(""), "an empty current file is not an artboard")
+    assert(!artboardChosen("{"), "broken current json is not an artboard")
+    let statusCalls = 0
+    const idle = scriptedPaper({
+      cacheDir: await mkdtemp(join(tmpdir(), "paper-fetch-status-off-")),
+      listResources: () => {
+        statusCalls += 1
+        return listPayload(true)
+      },
+    })
+    assert((await reportStatus(idle, "")) === "off", "no artboard reports off")
+    assert(statusCalls === 0, "off does not call Paper")
+    const up = scriptedPaper({
+      cacheDir: await mkdtemp(join(tmpdir(), "paper-fetch-status-live-")),
+      listResources: () => listPayload(true),
+    })
+    assert((await reportStatus(up, chosen)) === "live", "a reachable Paper reports live")
+    const closed = scriptedPaper({
+      cacheDir: await mkdtemp(join(tmpdir(), "paper-fetch-status-down-")),
+      listResources: () => {
+        throw new Error("connection refused")
+      },
+    })
+    assert((await reportStatus(closed, chosen)) === "not-live", "an unreachable Paper reports not-live")
+
+    const statusRoot = await mkdtemp(join(tmpdir(), "paper-fetch-status-cli-"))
+    const statusFile = join(statusRoot, "status")
+    const currentFile = join(statusRoot, "current.json")
+    const statusCache = await mkdtemp(join(tmpdir(), "paper-fetch-status-cache-"))
+    const offCli = spawnSync(script, ["status"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PAPER_PEEK_STATE: join(statusRoot, "missing.json"),
+        PAPER_PEEK_STATUS: statusFile,
+        PAPER_PEEK_CACHE: statusCache,
+      },
+    })
+    assert(offCli.status === 0 && offCli.stdout === "off\n", "status with no artboard prints off")
+    assert((await readFile(statusFile, "utf8")) === "off\n", "status writes the off word")
+    await writeFile(currentFile, chosen)
+    const downCli = spawnSync(script, ["status"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PAPER_PEEK_STATE: currentFile,
+        PAPER_PEEK_STATUS: statusFile,
+        PAPER_PEEK_CACHE: statusCache,
+        PAPER_MCP_URL: "http://127.0.0.1:9/mcp",
+      },
+    })
+    assert(downCli.status === 0 && downCli.stdout === "not-live\n", "status with Paper closed prints not-live")
+    assert((await readFile(statusFile, "utf8")) === "not-live\n", "status writes the not-live word")
+    const cacheNames = await readdir(statusCache)
+    assert(!cacheNames.includes("projects.json"), "status does not write the project cache")
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
