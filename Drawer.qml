@@ -23,6 +23,9 @@ Item {
   property string pageName: ""
   property string artboardName: ""
   property string imagePath: ""
+  property int shotRevision: 0
+
+  readonly property string fetchScript: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omarchy/plugins/fmchale.paper-peek/scripts/paper-fetch"
 
   readonly property string headerText: {
     if (fileId === "") return "Paper Peek"
@@ -37,6 +40,14 @@ Item {
     stateFile.reload()
     readCurrent()
     opened = true
+    refreshShot()
+  }
+
+  function refreshShot() {
+    if (fileId === "" || nodeId === "") return
+    if (shotFetch.running) return
+    shotFetch.command = [fetchScript, "shot", fileId, nodeId]
+    shotFetch.running = true
   }
 
   function close(payloadJson) {
@@ -102,6 +113,15 @@ Item {
     artboardName = fileId === "" || pageId === ""
       ? ""
       : nameFor(artboardsFile.text(), "artboards", nodeId)
+  }
+
+  Process {
+    id: shotFetch
+    running: false
+    command: [root.fetchScript, "shot", "x", "x"]
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.shotRevision += 1
+    }
   }
 
   ShellIpc {
@@ -245,7 +265,7 @@ Item {
             fillMode: Image.PreserveAspectFit
             horizontalAlignment: Image.AlignLeft
             verticalAlignment: Image.AlignTop
-            source: root.imagePath === "" ? "" : ("file://" + root.imagePath)
+            source: root.imagePath === "" ? "" : (Util.fileUrl(root.imagePath) + (root.shotRevision > 0 ? ("?v=" + root.shotRevision) : ""))
             sourceSize.width: Math.max(1, Math.round(width * (window.devicePixelRatio || 1)))
             height: implicitWidth > 0 ? width * implicitHeight / implicitWidth : 0
           }
