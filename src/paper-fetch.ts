@@ -19,6 +19,7 @@ export type FileId = string & { readonly [fileIdBrand]: true }
 export type NodeId = string & { readonly [nodeIdBrand]: true }
 export type FolderId = string & { readonly [folderIdBrand]: true }
 export type PageId = string & { readonly [pageIdBrand]: true }
+export type PeekStatus = "live" | "not-live" | "off"
 
 export type OpenFile = {
   readonly kind: "open-file"
@@ -215,6 +216,28 @@ export function scriptedPaper(script: PaperScript): PaperSource {
   return source
 }
 
+export function artboardChosen(text: string): boolean {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text) as unknown
+  } catch {
+    return false
+  }
+  if (!isRecord(parsed)) return false
+  if (typeof parsed.fileId !== "string" || typeof parsed.nodeId !== "string") return false
+  return parseFileId(parsed.fileId) !== null && parseNodeId(parsed.nodeId) !== null
+}
+
+export function peekStatus(reachable: boolean, chosen: boolean): PeekStatus {
+  if (!chosen) return "off"
+  return reachable ? "live" : "not-live"
+}
+
+export async function reportStatus(source: PaperSource, currentText: string): Promise<PeekStatus> {
+  if (!artboardChosen(currentText)) return peekStatus(false, false)
+  return peekStatus(await paperReachable(source), true)
+}
+
 export async function listProjects(source: PaperSource): Promise<ProjectResult> {
   try {
     const raw = await postTool(source, "list_resources", null)
@@ -385,6 +408,15 @@ function toolArguments(
       if (target === null || isShotTarget(target)) throw new Fail("bad-payload")
       if (target.pageId !== undefined) return { fileId: target.fileId, pageId: target.pageId }
       return { fileId: target.fileId }
+  }
+}
+
+async function paperReachable(source: PaperSource): Promise<boolean> {
+  try {
+    const raw = await postTool(source, "list_resources", null)
+    return !(parseToolIndex(raw) instanceof Fail)
+  } catch {
+    return false
   }
 }
 
@@ -892,6 +924,46 @@ function backendOf(source: PaperSource): Backend {
   return backend
 }
 
+function stateHome(): string {
+  return envValue("XDG_STATE_HOME") ?? join(homedir(), ".local", "state")
+}
+
+function currentArtboardPath(): string {
+  const override = envValue("PAPER_PEEK_STATE")
+  if (override !== null && override !== "") return override
+  return join(stateHome(), "paper-peek", "current.json")
+}
+
+function statusFilePath(): string {
+  const override = envValue("PAPER_PEEK_STATUS")
+  if (override !== null && override !== "") return override
+  return join(stateHome(), "paper-peek", "status")
+}
+
+async function readCurrentArtboardText(): Promise<string> {
+  try {
+    return await readFile(currentArtboardPath(), "utf8")
+  } catch {
+    return ""
+  }
+}
+
+async function publishStatus(word: PeekStatus): Promise<void> {
+  const path = statusFilePath()
+  const body = `${word}\n`
+  let same = false
+  try {
+    same = (await readFile(path, "utf8")) === body
+  } catch {
+    same = false
+  }
+  if (same) return
+  await mkdir(dirname(path), { recursive: true })
+  const tmp = `${path}.${process.pid}.new`
+  await writeFile(tmp, body)
+  await rename(tmp, path)
+}
+
 function envValue(name: string): string | null {
   const value = process.env[name]
   if (value === undefined || value === "") return null
@@ -907,6 +979,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 type Command =
+  | { readonly kind: "status" }
   | { readonly kind: "projects" }
   | { readonly kind: "pages"; readonly fileId: FileId; readonly refresh: boolean }
   | {
@@ -922,6 +995,12 @@ export async function run(argv: readonly string[], source: PaperSource): Promise
   if (command === "bad-args" || command === "bad-id") {
     process.stderr.write(`${command}\n`)
     return 3
+  }
+  if (command.kind === "status") {
+    const status = await reportStatus(source, await readCurrentArtboardText())
+    await publishStatus(status)
+    process.stdout.write(`${status}\n`)
+    return 0
   }
   if (command.kind === "projects") {
     const result = await listProjects(source)
@@ -959,6 +1038,7 @@ function finishCatalog(result: PageResult | ArtboardCatalogResult): 0 | 2 {
 }
 
 function parseCommand(argv: readonly string[]): Command | "bad-args" | "bad-id" {
+  if (argv.length === 1 && argv[0] === "status") return { kind: "status" }
   if (argv.length === 1 && argv[0] === "projects") return { kind: "projects" }
   if (argv[0] === "pages") return parsePages(argv)
   if (argv[0] === "artboards") return parseArtboards(argv)

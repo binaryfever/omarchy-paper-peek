@@ -12,7 +12,9 @@ Item {
 
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string statePath: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/paper-peek/current.json"
+  readonly property string statusPath: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/paper-peek/status"
   readonly property string cacheDir: Quickshell.env("PAPER_PEEK_CACHE") || (home + "/.cache/paper-peek")
+  readonly property string fetchScript: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omarchy/plugins/fmchale.paper-peek/scripts/paper-fetch"
   readonly property string absentCatalog: cacheDir + "/absent"
   readonly property int drawerWidth: 480
 
@@ -24,8 +26,17 @@ Item {
   property string artboardName: ""
   property string imagePath: ""
   property int shotRevision: 0
+  property string peekStatus: "off"
 
-  readonly property string fetchScript: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omarchy/plugins/fmchale.paper-peek/scripts/paper-fetch"
+  function applyStatus(text) {
+    var word = String(text || "").trim()
+    if (word === "live" || word === "not-live" || word === "off") root.peekStatus = word
+  }
+
+  function probeStatus() {
+    if (statusProbe.running) return
+    statusProbe.running = true
+  }
 
   readonly property string headerText: {
     if (fileId === "") return "Paper Peek"
@@ -138,6 +149,36 @@ Item {
       root.toggle()
       return root.opened ? "open" : "closed"
     }
+    function status(): string {
+      return root.peekStatus
+    }
+  }
+
+  Timer {
+    interval: 2000
+    repeat: true
+    running: true
+    triggeredOnStart: true
+    onTriggered: root.probeStatus()
+  }
+
+  Process {
+    id: statusProbe
+    running: false
+    command: [root.fetchScript, "status"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyStatus(text)
+    }
+  }
+
+  FileView {
+    path: root.statusPath
+    watchChanges: true
+    blockLoading: true
+    printErrors: false
+    onLoaded: root.applyStatus(text())
+    onFileChanged: reload()
   }
 
   FileView {
@@ -277,6 +318,18 @@ Item {
           visible: root.opened && (root.imagePath === "" || shot.status === Image.Error || shot.status === Image.Null)
           text: "No cached artboard"
           textFormat: Text.PlainText
+          color: Commons.Color.popups.text
+          font.family: Style.menuFontFamily
+          font.pixelSize: Style.font.body
+        }
+
+        Text {
+          z: 1
+          visible: root.peekStatus === "not-live"
+          text: "not live"
+          textFormat: Text.PlainText
+          anchors.left: parent.left
+          anchors.bottom: parent.bottom
           color: Commons.Color.popups.text
           font.family: Style.menuFontFamily
           font.pixelSize: Style.font.body
