@@ -1,4 +1,18 @@
 import { realpathSync } from "node:fs"
+import {
+  GONE_NOTICE,
+  artboardRows,
+  forgetArtboard,
+  memoryText,
+  pageRows,
+  parseMemory,
+  projectRows,
+  remember,
+  type ArtboardPlace,
+  type BrowserRow,
+  type ListedFile,
+  type PeekMemory,
+} from "./peek-memory.ts"
 import { appendFile, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
@@ -1084,6 +1098,185 @@ type Command =
     }
   | { readonly kind: "shot"; readonly fileId: FileId; readonly nodeId: NodeId }
   | { readonly kind: "watch"; readonly fileId: FileId; readonly nodeId: NodeId }
+  | { readonly kind: "resolve" }
+  | { readonly kind: "resolve-project"; readonly fileId: FileId }
+  | { readonly kind: "remember"; readonly fileId: FileId; readonly pageId: PageId; readonly nodeId: NodeId }
+  | { readonly kind: "browser-projects"; readonly refresh: boolean }
+  | { readonly kind: "browser-pages"; readonly fileId: FileId; readonly refresh: boolean }
+  | {
+      readonly kind: "browser-artboards"
+      readonly fileId: FileId
+      readonly pageId: PageId
+      readonly refresh: boolean
+    }
+
+type DrawerDirective =
+  | { readonly kind: "shot" }
+  | { readonly kind: "projects"; readonly notice: string }
+  | { readonly kind: "pages"; readonly fileId: string; readonly notice: string }
+
+type Presence = "present" | "missing-artboard" | "missing-file" | "unknown"
+
+async function readMemory(): Promise<PeekMemory> {
+  return parseMemory(await readCurrentArtboardText())
+}
+
+async function writeMemory(memory: PeekMemory): Promise<void> {
+  const text = memoryText(memory)
+  const path = currentArtboardPath()
+  let previous = ""
+  try {
+    previous = await readFile(path, "utf8")
+  } catch {
+    previous = ""
+  }
+  if (previous === text) return
+  await commitFile(path, textBytes(text))
+}
+
+async function namesFor(
+  source: PaperSource,
+  fileId: FileId,
+  pageId: PageId,
+  nodeId: NodeId,
+): Promise<ArtboardPlace> {
+  let projectName = ""
+  const projects = await readProjects(source)
+  if (projects.kind === "cached") {
+    for (const resource of projects.index.resources) {
+      if (resource.kind !== "folder" && resource.id === fileId) projectName = resource.name
+    }
+  }
+  const pages = await readPageCatalog(cacheDirOf(source), fileId)
+  const page = pages?.pages.find((item) => item.id === pageId)
+  const boards = await readArtboardCatalog(cacheDirOf(source), fileId, pageId)
+  const artboard = boards?.artboards.find((item) => item.id === nodeId)
+  return {
+    fileId,
+    pageId,
+    nodeId,
+    projectName,
+    pageName: page?.name ?? "",
+    artboardName: artboard?.name ?? "",
+  }
+}
+
+async function artboardPresence(source: PaperSource, place: ArtboardPlace): Promise<Presence> {
+  const fileId = parseFileId(place.fileId)
+  const pageId = parsePageId(place.pageId)
+  const nodeId = parseNodeId(place.nodeId)
+  if (fileId === null || pageId === null || nodeId === null) return "missing-artboard"
+  const loaded = await readResourceList(source)
+  if (loaded instanceof Fail) return "unknown"
+  const match = loaded.index.resources.find((resource) => resource.id === fileId)
+  if (match === undefined) return loaded.index.truncated ? "unknown" : "missing-file"
+  if (match.kind !== "open-file") return "unknown"
+  let raw: unknown
+  try {
+    raw = await postTool(source, "get_basic_info", { fileId, pageId })
+  } catch {
+    return "unknown"
+  }
+  const catalog = parseArtboardCatalog(fileId, pageId, raw)
+  if (catalog instanceof Fail) return "unknown"
+  await commitFile(
+    artboardsPath(cacheDirOf(source), fileId, pageId),
+    textBytes(JSON.stringify(catalog)),
+  )
+  return catalog.artboards.some((item) => item.id === nodeId) ? "present" : "missing-artboard"
+}
+
+async function resolveCurrent(
+  source: PaperSource,
+  memory: PeekMemory,
+): Promise<{ readonly memory: PeekMemory; readonly directive: DrawerDirective }> {
+  if (memory.current === null) return { memory, directive: { kind: "projects", notice: "" } }
+  const presence = await artboardPresence(source, memory.current)
+  if (presence === "missing-artboard" || presence === "missing-file") {
+    return {
+      memory: forgetArtboard(memory, memory.current),
+      directive: { kind: "projects", notice: GONE_NOTICE },
+    }
+  }
+  return { memory, directive: { kind: "shot" } }
+}
+
+async function resolveFile(
+  source: PaperSource,
+  memory: PeekMemory,
+  fileId: FileId,
+): Promise<{ readonly memory: PeekMemory; readonly directive: DrawerDirective }> {
+  const place = memory.byFile[fileId]
+  if (place === undefined) return { memory, directive: { kind: "pages", fileId, notice: "" } }
+  const presence = await artboardPresence(source, place)
+  if (presence === "missing-file") {
+    return {
+      memory: forgetArtboard(memory, place),
+      directive: { kind: "projects", notice: GONE_NOTICE },
+    }
+  }
+  if (presence === "missing-artboard") {
+    return {
+      memory: forgetArtboard(memory, place),
+      directive: { kind: "pages", fileId, notice: GONE_NOTICE },
+    }
+  }
+  return { memory: remember(memory, place), directive: { kind: "shot" } }
+}
+
+function listedFiles(index: ProjectIndex): ListedFile[] {
+  const folders = new Map<string, string>()
+  for (const resource of index.resources) {
+    if (resource.kind === "folder") folders.set(resource.id, resource.name)
+  }
+  const files: ListedFile[] = []
+  for (const resource of index.resources) {
+    if (resource.kind === "folder") continue
+    files.push({
+      id: resource.id,
+      name: resource.name,
+      folderId: resource.folder,
+      folderName: resource.folder === null ? null : (folders.get(resource.folder) ?? resource.folder),
+    })
+  }
+  return files
+}
+
+async function projectIndex(source: PaperSource, refresh: boolean): Promise<ProjectIndex | null> {
+  if (!refresh) {
+    const stored = await readProjects(source)
+    if (stored.kind === "cached") return stored.index
+  }
+  const listed = await listProjects(source)
+  if (listed.kind === "unavailable") return null
+  return listed.index
+}
+
+async function browserPayload(
+  source: PaperSource,
+  command:
+    | { readonly kind: "browser-projects"; readonly refresh: boolean }
+    | { readonly kind: "browser-pages"; readonly fileId: FileId; readonly refresh: boolean }
+    | {
+        readonly kind: "browser-artboards"
+        readonly fileId: FileId
+        readonly pageId: PageId
+        readonly refresh: boolean
+      },
+): Promise<{ readonly rows: readonly BrowserRow[] }> {
+  if (command.kind === "browser-projects") {
+    const index = await projectIndex(source, command.refresh)
+    return { rows: projectRows(index === null ? [] : listedFiles(index), await readMemory()) }
+  }
+  if (command.kind === "browser-pages") {
+    const listed = await listPages(source, command.fileId, command.refresh)
+    if (listed.kind === "unavailable") return { rows: [] }
+    return { rows: pageRows(command.fileId, listed.catalog.pages) }
+  }
+  const listed = await listArtboards(source, command.fileId, command.pageId, command.refresh)
+  if (listed.kind === "unavailable") return { rows: [] }
+  return { rows: artboardRows(command.fileId, command.pageId, listed.catalog.artboards) }
+}
 
 export async function run(argv: readonly string[], source: PaperSource): Promise<0 | 2 | 3> {
   const command = parseCommand(argv)
@@ -1122,6 +1315,32 @@ export async function run(argv: readonly string[], source: PaperSource): Promise
     process.stdout.write(`${result.kind}\n`)
     return 0
   }
+  if (command.kind === "resolve") {
+    const resolved = await resolveCurrent(source, await readMemory())
+    await writeMemory(resolved.memory)
+    process.stdout.write(`${JSON.stringify(resolved.directive)}\n`)
+    return 0
+  }
+  if (command.kind === "resolve-project") {
+    const resolved = await resolveFile(source, await readMemory(), command.fileId)
+    await writeMemory(resolved.memory)
+    process.stdout.write(`${JSON.stringify(resolved.directive)}\n`)
+    return 0
+  }
+  if (command.kind === "remember") {
+    const place = await namesFor(source, command.fileId, command.pageId, command.nodeId)
+    await writeMemory(remember(await readMemory(), place))
+    process.stdout.write(`${JSON.stringify({ kind: "shot" })}\n`)
+    return 0
+  }
+  if (
+    command.kind === "browser-projects" ||
+    command.kind === "browser-pages" ||
+    command.kind === "browser-artboards"
+  ) {
+    process.stdout.write(`${JSON.stringify(await browserPayload(source, command))}\n`)
+    return 0
+  }
   if (command.kind === "pages") {
     return finishCatalog(await listPages(source, command.fileId, command.refresh))
   }
@@ -1146,6 +1365,47 @@ function parseCommand(argv: readonly string[]): Command | "bad-args" | "bad-id" 
   if (argv[0] === "artboards") return parseArtboards(argv)
   if (argv[0] === "shot") return parseShot(argv)
   if (argv[0] === "watch") return parseWatch(argv)
+  if (argv.length === 1 && argv[0] === "resolve") return { kind: "resolve" }
+  if (argv[0] === "resolve-project") return parseResolveProject(argv)
+  if (argv[0] === "remember") return parseRemember(argv)
+  if (argv[0] === "browser") return parseBrowser(argv)
+  return "bad-args"
+}
+
+function parseResolveProject(argv: readonly string[]): Command | "bad-args" | "bad-id" {
+  if (argv.length !== 2 || argv[1]!.startsWith("-")) return "bad-args"
+  const fileId = parseFileId(argv[1]!)
+  if (fileId === null) return "bad-id"
+  return { kind: "resolve-project", fileId }
+}
+
+function parseRemember(argv: readonly string[]): Command | "bad-args" | "bad-id" {
+  if (argv.length !== 4 || argv.slice(1).some((token) => token.startsWith("-"))) return "bad-args"
+  const fileId = parseFileId(argv[1]!)
+  const pageId = parsePageId(argv[2]!)
+  const nodeId = parseNodeId(argv[3]!)
+  if (fileId === null || pageId === null || nodeId === null) return "bad-id"
+  return { kind: "remember", fileId, pageId, nodeId }
+}
+
+function parseBrowser(argv: readonly string[]): Command | "bad-args" | "bad-id" {
+  const split = splitRefresh(argv)
+  if (split === "bad-args" || split.args.length < 1) return "bad-args"
+  const head = split.args[0]
+  if (head === "projects" && split.args.length === 1) {
+    return { kind: "browser-projects", refresh: split.refresh }
+  }
+  if (head === "pages" && split.args.length === 2) {
+    const fileId = parseFileId(split.args[1]!)
+    if (fileId === null) return "bad-id"
+    return { kind: "browser-pages", fileId, refresh: split.refresh }
+  }
+  if (head === "artboards" && split.args.length === 3) {
+    const fileId = parseFileId(split.args[1]!)
+    const pageId = parsePageId(split.args[2]!)
+    if (fileId === null || pageId === null) return "bad-id"
+    return { kind: "browser-artboards", fileId, pageId, refresh: split.refresh }
+  }
   return "bad-args"
 }
 
