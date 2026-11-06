@@ -39,6 +39,22 @@ Item {
   property string browseProjectName: ""
   property string browsePageName: ""
 
+  readonly property string floatPath: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/paper-peek/float.json"
+  readonly property string geomScript: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omarchy/plugins/fmchale.paper-peek/scripts/float-geometry"
+  readonly property int floatInset: 16
+  readonly property int floatMinW: 180
+  readonly property int floatMinH: 140
+  property bool floated: false
+  property bool passClicks: false
+  property bool floatKnown: false
+  property bool floatDragging: false
+  property int floatX: 16
+  property int floatY: 16
+  property int floatW: 420
+  property int floatH: 320
+
+  readonly property string shotSource: imagePath === "" ? "" : (Util.fileUrl(imagePath) + (shotRevision > 0 ? ("?v=" + shotRevision) : ""))
+
   function applyStatus(text) {
     var word = String(text || "").trim()
     if (word === "live" || word === "not-live" || word === "off") root.peekStatus = word
@@ -66,6 +82,7 @@ Item {
   }
 
   function open(payloadJson) {
+    floated = false
     stateFile.reload()
     readCurrent()
     opened = true
@@ -90,12 +107,185 @@ Item {
   }
 
   function close(payloadJson) {
+    floated = false
     opened = false
   }
 
   function toggle() {
+    if (floated) {
+      floated = false
+      return
+    }
     if (opened) close("")
     else open("")
+  }
+
+  function screenSize() {
+    var target = floatWindow.screen
+    if (!target && Quickshell.screens.length > 0) target = Quickshell.screens[0]
+    return {
+      width: target ? target.width : 1,
+      height: target ? target.height : 1
+    }
+  }
+
+  function parseFloatText(text) {
+    if (!text || String(text).trim() === "") return null
+    var parsed
+    try {
+      parsed = JSON.parse(text)
+    } catch (e) {
+      return null
+    }
+    if (!parsed || typeof parsed.x !== "number" || typeof parsed.y !== "number") return null
+    if (typeof parsed.width !== "number" || typeof parsed.height !== "number") return null
+    if (!isFinite(parsed.x) || !isFinite(parsed.y) || !isFinite(parsed.width) || !isFinite(parsed.height)) return null
+    if (parsed.width <= 0 || parsed.height <= 0) return null
+    if (parsed.clickThrough !== undefined && typeof parsed.clickThrough !== "boolean") return null
+    return {
+      x: parsed.x,
+      y: parsed.y,
+      width: parsed.width,
+      height: parsed.height,
+      clickThrough: parsed.clickThrough === true
+    }
+  }
+
+  function clampFloat() {
+    var box = screenSize()
+    var w = Math.round(floatW)
+    var h = Math.round(floatH)
+    if (w < floatMinW) w = floatMinW
+    if (h < floatMinH) h = floatMinH
+    if (w > box.width) w = Math.max(1, Math.round(box.width))
+    if (h > box.height) h = Math.max(1, Math.round(box.height))
+    var x = Math.round(floatX)
+    var y = Math.round(floatY)
+    if (x < 0) x = 0
+    if (y < 0) y = 0
+    if (x > box.width - w) x = Math.round(box.width - w)
+    if (y > box.height - h) y = Math.round(box.height - h)
+    floatX = x
+    floatY = y
+    floatW = w
+    floatH = h
+  }
+
+  function placeDefault() {
+    var box = screenSize()
+    var w = Math.min(420, Math.max(floatMinW, box.width - floatInset * 2))
+    var h = Math.min(320, Math.max(floatMinH, box.height - floatInset * 2))
+    floatW = w
+    floatH = h
+    floatX = Math.max(floatInset, box.width - w - floatInset)
+    floatY = Math.max(floatInset, box.height - h - floatInset)
+    passClicks = false
+    floatKnown = true
+  }
+
+  function applyFloatText(text) {
+    if (floatDragging) return
+    var parsed = parseFloatText(text)
+    if (!parsed) return
+    floatX = parsed.x
+    floatY = parsed.y
+    floatW = parsed.width
+    floatH = parsed.height
+    passClicks = parsed.clickThrough
+    floatKnown = true
+    var before = floatX + "," + floatY + "," + floatW + "," + floatH
+    clampFloat()
+    var after = floatX + "," + floatY + "," + floatW + "," + floatH
+    if (before !== after) saveFloat()
+  }
+
+  function saveFloat() {
+    var body = JSON.stringify({
+      x: floatX,
+      y: floatY,
+      width: floatW,
+      height: floatH,
+      clickThrough: passClicks
+    }, null, 2) + "\n"
+    if (floatFile.text() === body) return
+    floatFile.setText(body)
+  }
+
+  function dragFloat(x, y, w, h) {
+    floatX = x
+    floatY = y
+    floatW = w
+    floatH = h
+    clampFloat()
+  }
+
+  function resizeFloat(mode, x, y, w, h, dx, dy) {
+    var nextX = x
+    var nextY = y
+    var nextW = w
+    var nextH = h
+    if (mode.indexOf("l") >= 0) {
+      nextX = x + dx
+      nextW = w - dx
+    }
+    if (mode.indexOf("r") >= 0) nextW = w + dx
+    if (mode.indexOf("t") >= 0) {
+      nextY = y + dy
+      nextH = h - dy
+    }
+    if (mode.indexOf("b") >= 0) nextH = h + dy
+    dragFloat(nextX, nextY, nextW, nextH)
+  }
+
+  function finishFloatSize() {
+    clampFloat()
+    saveFloat()
+  }
+
+  function snapFloat() {
+    var box = screenSize()
+    snapFetch.command = [
+      geomScript, "snap",
+      String(floatX), String(floatY), String(floatW), String(floatH),
+      String(box.width), String(box.height),
+      passClicks ? "1" : "0"
+    ]
+    if (snapFetch.running) return
+    snapFetch.running = true
+  }
+
+  function applySnapText(text) {
+    var parsed = parseFloatText(text)
+    if (!parsed) {
+      clampFloat()
+      saveFloat()
+      return
+    }
+    floatX = parsed.x
+    floatY = parsed.y
+    floatW = parsed.width
+    floatH = parsed.height
+    passClicks = parsed.clickThrough
+    saveFloat()
+  }
+
+  function enterFloat() {
+    if (!floatKnown) placeDefault()
+    opened = false
+    floated = true
+    readCurrent()
+    saveFloat()
+  }
+
+  function leaveFloatToDrawer() {
+    floated = false
+    open("")
+  }
+
+  function togglePassClicks() {
+    if (!floatKnown) placeDefault()
+    passClicks = !passClicks
+    saveFloat()
   }
 
   function safeId(value) {
@@ -338,6 +528,11 @@ Item {
   }
 
   function browserKey(event) {
+    if (event.key === Qt.Key_F) {
+      root.enterFloat()
+      event.accepted = true
+      return
+    }
     if (event.key === Qt.Key_Up) root.moveCursor(-1)
     else if (event.key === Qt.Key_Down) root.moveCursor(1)
     else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.activateRow(root.cursor)
@@ -383,6 +578,18 @@ Item {
     }
     function status(): string {
       return root.peekStatus
+    }
+    function layout(): string {
+      if (root.floated) {
+        root.leaveFloatToDrawer()
+        return "drawer"
+      }
+      root.enterFloat()
+      return "float"
+    }
+    function clickthrough(): string {
+      root.togglePassClicks()
+      return root.passClicks ? "on" : "off"
     }
   }
 
@@ -484,7 +691,7 @@ Item {
       NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
     }
 
-    visible: reveal > 0.01
+    visible: reveal > 0.01 && !root.floated
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
     WlrLayershell.layer: WlrLayer.Overlay
@@ -524,7 +731,7 @@ Item {
         Item {
           id: headerBar
           width: parent.width
-          height: Math.max(header.implicitHeight, actionLink.implicitHeight, backLink.implicitHeight)
+          height: Math.max(header.implicitHeight, actionLink.implicitHeight, backLink.implicitHeight, floatLink.implicitHeight)
 
           Text {
             id: backLink
@@ -547,7 +754,7 @@ Item {
             id: header
             anchors.left: backLink.visible ? backLink.right : parent.left
             anchors.leftMargin: backLink.visible ? Style.spacing.sm : 0
-            anchors.right: actionLink.left
+            anchors.right: floatLink.left
             anchors.rightMargin: Style.spacing.sm
             anchors.verticalCenter: parent.verticalCenter
             text: root.headerText
@@ -556,6 +763,23 @@ Item {
             font.family: Style.menuFontFamily
             font.pixelSize: Style.font.title
             elide: Text.ElideRight
+          }
+
+          Text {
+            id: floatLink
+            anchors.right: actionLink.left
+            anchors.rightMargin: Style.spacing.md
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Float"
+            textFormat: Text.PlainText
+            color: Commons.Color.popups.text
+            font.family: Style.menuFontFamily
+            font.pixelSize: Style.font.body
+
+            MouseArea {
+              anchors.fill: parent
+              onClicked: root.enterFloat()
+            }
           }
 
           Text {
@@ -677,6 +901,11 @@ Item {
             root.close("")
             event.accepted = true
           }
+          Keys.onPressed: function(event) {
+            if (event.key !== Qt.Key_F) return
+            root.enterFloat()
+            event.accepted = true
+          }
 
           Image {
             id: shot
@@ -686,7 +915,7 @@ Item {
             fillMode: Image.PreserveAspectFit
             horizontalAlignment: Image.AlignLeft
             verticalAlignment: Image.AlignTop
-            source: root.imagePath === "" ? "" : (Util.fileUrl(root.imagePath) + (root.shotRevision > 0 ? ("?v=" + root.shotRevision) : ""))
+            source: root.shotSource
             sourceSize.width: Math.max(1, Math.round(width * (window.devicePixelRatio || 1)))
             height: implicitWidth > 0 ? width * implicitHeight / implicitWidth : 0
           }
@@ -714,6 +943,230 @@ Item {
           color: Commons.Color.popups.text
           font.family: Style.menuFontFamily
           font.pixelSize: Style.font.body
+        }
+      }
+    }
+  }
+
+  FileView {
+    id: floatFile
+    path: root.floatPath
+    watchChanges: true
+    blockLoading: true
+    printErrors: false
+    atomicWrites: true
+    onLoaded: root.applyFloatText(text())
+    onFileChanged: reload()
+  }
+
+  Process {
+    id: snapFetch
+    running: false
+    command: [root.geomScript, "snap", "0", "0", "180", "140", "1", "1", "0"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applySnapText(text)
+    }
+    onExited: function(exitCode) {
+      if (exitCode === 0) return
+      root.clampFloat()
+      root.saveFloat()
+    }
+  }
+
+  // A layer surface stays on every workspace. OnDemand takes a click on the
+  // card. Exclusive would take the keys the editor is using.
+  PanelWindow {
+    id: floatWindow
+    visible: root.floated
+    color: "transparent"
+    screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
+    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.namespace: "fmchale-paper-peek-float"
+    WlrLayershell.keyboardFocus: root.floated && !root.passClicks ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
+    anchors.left: true
+    anchors.top: true
+    margins.left: root.floatX
+    margins.top: root.floatY
+    implicitWidth: root.floatW
+    implicitHeight: root.floatH
+    mask: Region { item: root.passClicks ? null : floatCard }
+
+    Rectangle {
+      id: floatCard
+      anchors.fill: parent
+      radius: Style.cornerRadius
+      color: Commons.Color.popups.background
+      border.width: Math.max(1, Style.spacing.hairline)
+      border.color: Commons.Color.popups.border
+      clip: true
+
+      Item {
+        anchors.fill: parent
+        focus: root.floated && !root.passClicks
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_F) {
+            root.leaveFloatToDrawer()
+            event.accepted = true
+          } else if (event.key === Qt.Key_C) {
+            root.togglePassClicks()
+            event.accepted = true
+          } else if (event.key === Qt.Key_Escape) {
+            root.floated = false
+            event.accepted = true
+          }
+        }
+      }
+
+      Item {
+        id: floatHeader
+        z: 2
+        height: 32
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+
+        Text {
+          anchors.left: parent.left
+          anchors.leftMargin: Style.spacing.sm
+          anchors.right: passButton.left
+          anchors.rightMargin: Style.spacing.sm
+          anchors.verticalCenter: parent.verticalCenter
+          text: root.headerText
+          textFormat: Text.PlainText
+          color: Commons.Color.popups.text
+          font.family: Style.menuFontFamily
+          font.pixelSize: Style.font.body
+          elide: Text.ElideRight
+        }
+
+        Rectangle {
+          id: passButton
+          anchors.right: parent.right
+          anchors.rightMargin: Style.spacing.sm
+          anchors.verticalCenter: parent.verticalCenter
+          width: passLabel.implicitWidth + Style.spacing.lg * 2
+          height: 22
+          radius: Style.cornerRadius
+          color: root.passClicks ? Commons.Color.urgent : "transparent"
+          border.width: Math.max(1, Style.spacing.hairline)
+          border.color: Commons.Color.popups.border
+
+          Text {
+            id: passLabel
+            anchors.centerIn: parent
+            text: root.passClicks ? "Passing" : "Clicks"
+            textFormat: Text.PlainText
+            color: Commons.Color.popups.text
+            font.family: Style.menuFontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          MouseArea {
+            anchors.fill: parent
+            onClicked: root.togglePassClicks()
+          }
+        }
+      }
+
+      Image {
+        id: floatShot
+        anchors.top: floatHeader.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        asynchronous: true
+        cache: false
+        fillMode: Image.PreserveAspectFit
+        horizontalAlignment: Image.AlignHCenter
+        verticalAlignment: Image.AlignVCenter
+        source: root.shotSource
+        sourceSize.width: Math.max(1, Math.round(width * (floatWindow.devicePixelRatio || 1)))
+      }
+
+      Text {
+        anchors.centerIn: parent
+        visible: root.floated && (root.imagePath === "" || floatShot.status === Image.Error || floatShot.status === Image.Null)
+        text: "No cached artboard"
+        textFormat: Text.PlainText
+        color: Commons.Color.popups.text
+        font.family: Style.menuFontFamily
+        font.pixelSize: Style.font.body
+      }
+
+      Text {
+        visible: root.peekStatus === "not-live"
+        text: "not live"
+        textFormat: Text.PlainText
+        anchors.left: parent.left
+        anchors.leftMargin: Style.spacing.sm
+        anchors.bottom: parent.bottom
+        color: Commons.Color.popups.text
+        font.family: Style.menuFontFamily
+        font.pixelSize: Style.font.body
+      }
+
+      MouseArea {
+        id: floatGesture
+        z: 1
+        anchors.fill: parent
+        acceptedButtons: Qt.LeftButton
+        property string mode: ""
+        property real pressX: 0
+        property real pressY: 0
+        property real originX: 0
+        property real originY: 0
+        property real originW: 0
+        property real originH: 0
+
+        function gestureAt(px, py) {
+          var edge = 10
+          var left = px <= edge
+          var right = px >= width - edge
+          var top = py <= edge
+          var bottom = py >= height - edge
+          if (left || right || top || bottom)
+            return (left ? "l" : "") + (right ? "r" : "") + (top ? "t" : "") + (bottom ? "b" : "")
+          if (py < floatHeader.height) return "move"
+          return ""
+        }
+
+        onPressed: function(mouse) {
+          mode = gestureAt(mouse.x, mouse.y)
+          if (mode === "") return
+          var global = floatCard.mapToGlobal(mouse.x, mouse.y)
+          pressX = global.x
+          pressY = global.y
+          originX = root.floatX
+          originY = root.floatY
+          originW = root.floatW
+          originH = root.floatH
+          root.floatDragging = true
+        }
+
+        onPositionChanged: function(mouse) {
+          if (!pressed || mode === "") return
+          var global = floatCard.mapToGlobal(mouse.x, mouse.y)
+          var dx = global.x - pressX
+          var dy = global.y - pressY
+          if (mode === "move") root.dragFloat(originX + dx, originY + dy, originW, originH)
+          else root.resizeFloat(mode, originX, originY, originW, originH, dx, dy)
+        }
+
+        onReleased: {
+          var ended = mode
+          mode = ""
+          root.floatDragging = false
+          if (ended === "") return
+          if (ended === "move") root.snapFloat()
+          else root.finishFloatSize()
+        }
+
+        onCanceled: {
+          mode = ""
+          root.floatDragging = false
+          root.finishFloatSize()
         }
       }
     }
