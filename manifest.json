@@ -3,7 +3,11 @@
   "id": "fmchale.paper-peek",
   "name": "Paper Peek",
   "version": "0.0.1",
-  "kinds": ["bar-widget"],
-  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "kinds": ["bar-widget", "overlay"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "overlay": "Drawer.qml"
+  },
   "barWidget": { "defaultSection": "left" }
 }
