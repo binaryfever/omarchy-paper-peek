@@ -21,7 +21,7 @@ Read only against Paper. Never call Paper tools that open files, select, write, 
 Never edit Omarchy's own files under ~/.local/share/omarchy/. Reading them to learn how first-party plugins work is fine. Only change user config: ~/.config/omarchy/, ~/.config/hypr/.
 Don't change existing keybindings. Check omarchy menu keybindings --print before adding one.
 Paper can be closed. Every code path must handle Paper being unreachable, or an artboard having been deleted, without crashing, and keep showing the last cached image.
-Keep the shell light. Plugins run inside the long-lived omarchy-shell process. No busy loops; only poll while the drawer is open.
+Keep the shell light. Plugins run inside the long-lived omarchy-shell process. No busy loops. The status word is polled on a timer. Artboard change checks run only while the drawer is open, and only a changed `updatedAt` from `list_resources` fetches a new screenshot.
 Record decisions in docs/decisions/NNN-short-title.md with what was chosen and why.
 Repo layout
 manifest.json          plugin manifest (id, name, version, kinds, entryPoints)

@@ -61,6 +61,14 @@ Item {
     shotFetch.running = true
   }
 
+  function watchArtboard() {
+    if (!opened || peekStatus !== "live") return
+    if (fileId === "" || nodeId === "") return
+    if (watchFetch.running || shotFetch.running) return
+    watchFetch.command = [fetchScript, "watch", fileId, nodeId]
+    watchFetch.running = true
+  }
+
   function close(payloadJson) {
     opened = false
   }
@@ -160,6 +168,26 @@ Item {
     running: true
     triggeredOnStart: true
     onTriggered: root.probeStatus()
+  }
+
+  Timer {
+    interval: 2000
+    repeat: true
+    running: root.opened && root.peekStatus === "live" && root.fileId !== "" && root.nodeId !== ""
+    onTriggered: root.watchArtboard()
+  }
+
+  Process {
+    id: watchFetch
+    running: false
+    command: [root.fetchScript, "watch", "x", "x"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (!root.opened) return
+        if (String(text || "").trim() === "changed") root.refreshShot()
+      }
+    }
   }
 
   Process {
