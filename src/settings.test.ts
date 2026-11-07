@@ -44,6 +44,7 @@ async function runTests(): Promise<void> {
     assert(absent.settings.defaultMode === "drawer", "the default mode is drawer")
     assert(absent.settings.toggleHotkey === "SUPER + SHIFT + H", "the default toggle chord is Super+Shift+H")
     assert(absent.settings.browserHotkey === "", "the browser has no default hotkey")
+    assert(absent.settings.cacheBudgetMb === 200, "the default cache budget is 200")
     assert(absent.paperUrl === "http://127.0.0.1:29979/mcp", "the default Paper url uses port 29979")
     assert(configuredPaperUrl() === absent.paperUrl, "paper-fetch uses the default url when no file or env is set")
 
@@ -95,6 +96,15 @@ async function runTests(): Promise<void> {
     assert(bad.settings.defaultMode === "drawer", "a bad mode falls back to drawer")
     assert(bad.settings.paperAddress === DEFAULT_SETTINGS.paperAddress, "a url is not an address")
     assert(bad.warnings.length === 7, "each invalid value logs its own warning")
+
+    assert(parseSettings(JSON.stringify({ cacheBudgetMb: 20 })).settings.cacheBudgetMb === 20, "20 stays")
+    assert(parseSettings(JSON.stringify({ cacheBudgetMb: 0 })).settings.cacheBudgetMb === 0, "0 stays")
+    assert(parseSettings("{}").settings.cacheBudgetMb === 200, "a missing cacheBudgetMb is 200")
+    assert(parseSettings(JSON.stringify({ cacheBudgetMb: 1048576 })).settings.cacheBudgetMb === 1048576, "1048576 stays")
+    for (const value of [-1, 1.5, 1048577]) {
+      const report = parseSettings(JSON.stringify({ cacheBudgetMb: value }))
+      assert(report.settings.cacheBudgetMb === 200, `${value} falls back to 200`)
+    }
 
     const file = join(absentDir, "settings.json")
     await writeFile(file, JSON.stringify({ paperAddress: "10.1.1.1:9" }))
@@ -155,8 +165,14 @@ async function runTests(): Promise<void> {
       env: { ...process.env, PAPER_PEEK_SETTINGS: join(absentDir, "cli.json"), PAPER_MCP_URL: "" },
     })
     assert(cli.status === 0, "settings exits 0 when the file is missing")
-    const payload = JSON.parse(cli.stdout) as { source: string; drawerSide: string; warnings: string[] }
+    const payload = JSON.parse(cli.stdout) as {
+      source: string
+      drawerSide: string
+      warnings: string[]
+      cacheBudgetMb: number
+    }
     assert(payload.source === "absent" && payload.drawerSide === "right" && payload.warnings.length === 0, "settings prints the defaults")
+    assert(payload.cacheBudgetMb === 200, "settings prints the default budget")
     await writeFile(join(absentDir, "cli.json"), "{")
     const warned = spawnSync(script, ["settings"], {
       encoding: "utf8",

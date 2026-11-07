@@ -65,6 +65,7 @@ Change Paper Peek in `~/.config/paper-peek/settings.json`. With no file, Paper P
 | `refreshIntervalMs` | `2000` | Milliseconds between Paper checks, from 500 to 60000 |
 | `defaultMode` | `drawer` | `drawer`, `float`, or `dock` on the next open |
 | `paperAddress` | `127.0.0.1:29979` | Paper host and port. Requests use that host and port on the path `/mcp` |
+| `cacheBudgetMb` | `200` | Cap on `shots/`, in megabytes, from 0 to 1048576. 0 keeps the current artboard and the five recents |
 
 Leave a key out to keep its default. `PAPER_MCP_URL` overrides `paperAddress` when you run `scripts/paper-fetch` yourself. When this file exists, the drawer uses the address from the file.
 
