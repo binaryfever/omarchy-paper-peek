@@ -238,7 +238,7 @@ async function runTests(): Promise<void> {
     const drawer = await readFile(join(root, "Drawer.qml"), "utf8")
     assert(!drawer.includes("resolve-project"), "browsing a project does not ask Paper to resolve it")
     assert(
-      drawer.includes('["browser", "pages", row.fileId]'),
+      drawer.includes('["browser", "pages", target.fileId]'),
       "picking a project lists that project's cached pages",
     )
     assert(drawer.includes("Qt.Key_Return"), "Enter on the shot opens the browser")

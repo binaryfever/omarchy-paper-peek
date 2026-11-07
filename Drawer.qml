@@ -33,7 +33,8 @@ Item {
   property string nodeId: ""
   property string projectName: ""
   property string pageName: ""
-  property string artboardName: ""
+  property var pageHold: null
+  property var boards: []
   property string imagePath: ""
   property int shotRevision: 0
   property string peekStatus: "off"
@@ -44,9 +45,13 @@ Item {
   property var rows: []
   property int cursor: 0
   property string browseFileId: ""
-  property string browsePageId: ""
   property string browseProjectName: ""
-  property string browsePageName: ""
+
+  readonly property string listedFileId: root.pageHold ? root.pageHold.fileId : root.fileId
+  readonly property string listedPageId: root.pageHold ? root.pageHold.pageId : root.pageId
+  readonly property bool shotHere:
+    root.fileId !== "" && root.pageId !== "" && root.nodeId !== ""
+    && root.fileId === root.listedFileId && root.pageId === root.listedPageId
 
   readonly property string floatPath: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/paper-peek/float.json"
   readonly property string geomScript: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omarchy/plugins/fmchale.paper-peek/scripts/float-geometry"
@@ -75,21 +80,33 @@ Item {
     statusProbe.running = true
   }
 
-  readonly property string headerText: {
+  readonly property string contextLine: {
     if (root.view === "projects") return "Projects"
-    if (root.view === "pages") return root.browseProjectName !== "" ? root.browseProjectName : root.browseFileId
-    if (root.view === "artboards") {
-      var project = root.browseProjectName !== "" ? root.browseProjectName : root.browseFileId
-      var page = root.browsePageName !== "" ? root.browsePageName : root.browsePageId
-      return project + " › " + page
+    if (root.view === "pages")
+      return root.browseProjectName !== "" ? root.browseProjectName : root.browseFileId
+    if (root.view !== "shot") return "Paper Peek"
+    if (root.pageHold) {
+      var holdProject = root.pageHold.projectName !== "" ? root.pageHold.projectName : root.pageHold.fileId
+      var holdPage = root.pageHold.pageName !== "" ? root.pageHold.pageName : root.pageHold.pageId
+      if (holdPage === "") return holdProject
+      return holdProject + " › " + holdPage
     }
     if (fileId === "") return "Paper Peek"
     var shotProject = projectName !== "" ? projectName : fileId
     var shotPage = pageName !== "" ? pageName : pageId
-    var artboard = artboardName !== "" ? artboardName : nodeId
-    if (shotPage === "") return shotProject + " › " + artboard
-    return shotProject + " › " + shotPage + " › " + artboard
+    if (shotPage === "") return shotProject
+    return shotProject + " › " + shotPage
   }
+
+  readonly property string subjectLine: {
+    if (root.view !== "shot") return ""
+    if (root.pageHold && !root.shotHere) return ""
+    return root.boardName(root.nodeId)
+  }
+
+  readonly property string headerText: root.subjectLine === ""
+    ? root.contextLine
+    : root.contextLine + " › " + root.subjectLine
 
   function open(payloadJson) {
     if (docked) undock()
@@ -98,7 +115,7 @@ Item {
     readCurrent()
     opened = true
     notice = ""
-    view = fileId !== "" && nodeId !== "" ? "shot" : "projects"
+    show({ kind: "current" })
     startCommand(["resolve"], "resolve")
   }
 
@@ -180,7 +197,7 @@ Item {
     stateFile.reload()
     readCurrent()
     notice = ""
-    view = fileId !== "" && nodeId !== "" ? "shot" : "projects"
+    show({ kind: "current" })
     startCommand(["resolve"], "resolve")
     Qt.callLater(function() {
       if (!docked) return
@@ -350,7 +367,7 @@ Item {
     if (!floatKnown) placeDefault()
     opened = false
     floated = true
-    readCurrent()
+    show({ kind: "current" })
     saveFloat()
   }
 
@@ -416,10 +433,97 @@ Item {
   function readNames() {
     projectName = nameFor(projectsFile.text(), "resources", fileId)
     pageName = fileId === "" ? "" : nameFor(pagesFile.text(), "pages", pageId)
-    artboardName = fileId === "" || pageId === ""
-      ? ""
-      : nameFor(artboardsFile.text(), "artboards", nodeId)
   }
+
+  function show(target) {
+    if (!target || !target.kind) return
+    if (target.kind === "projects") {
+      pageHold = null
+      view = "projects"
+      rows = []
+      cursor = 0
+      startCommand(["browser", "projects"], "rows")
+      return
+    }
+    if (target.kind === "pages") {
+      pageHold = null
+      browseFileId = target.fileId || ""
+      browseProjectName = target.projectName || ""
+      view = "pages"
+      rows = []
+      cursor = 0
+      startCommand(["browser", "pages", target.fileId], "rows")
+      return
+    }
+    if (target.kind === "page") {
+      pageHold = {
+        fileId: target.fileId,
+        pageId: target.pageId,
+        projectName: target.projectName || "",
+        pageName: target.pageName || ""
+      }
+      view = "shot"
+      startCommand(["artboards", target.fileId, target.pageId], "catalog")
+      return
+    }
+    if (target.kind === "current") {
+      readCurrent()
+      pageHold = null
+      if (fileId !== "" && nodeId !== "") {
+        view = "shot"
+        return
+      }
+      view = "projects"
+      rows = []
+      cursor = 0
+      startCommand(["browser", "projects"], "rows")
+    }
+  }
+
+  function rememberPlace(fileId, pageId, nodeId) {
+    startCommand(["remember", fileId, pageId, nodeId], "remember")
+  }
+
+  function parseBoards(text) {
+    if (!text) return []
+    try {
+      var parsed = JSON.parse(text)
+      if (!parsed || !Array.isArray(parsed.artboards)) return []
+      if (safeId(parsed.fileId) !== listedFileId || safeId(parsed.pageId) !== listedPageId) return null
+      var kept = []
+      for (var i = 0; i < parsed.artboards.length; i++) {
+        var item = parsed.artboards[i]
+        if (!item) continue
+        var id = safeId(item.id)
+        if (id === "" || typeof item.name !== "string") continue
+        kept.push({ id: id, name: item.name })
+      }
+      return kept
+    } catch (e) {
+      return []
+    }
+  }
+
+  function boardName(nodeId) {
+    if (nodeId === "") return ""
+    for (var i = 0; i < boards.length; i++) {
+      if (boards[i] && boards[i].id === nodeId) return boards[i].name
+    }
+    return ""
+  }
+
+  function stageHeight(viewport, pairHeight) {
+    if (pairHeight > viewport) return pairHeight
+    return viewport
+  }
+
+  function pairY(stageH, pairHeight) {
+    if (pairHeight >= stageH) return 0
+    return Math.round((stageH - pairHeight) / 2)
+  }
+
+  onListedFileIdChanged: boards = []
+  onListedPageIdChanged: boards = []
 
   function startCommand(args, name) {
     if (commandFetch.running) {
@@ -457,6 +561,7 @@ Item {
     if (name === "resolve") root.applyResolve(parsed)
     else if (name === "rows") root.applyRows(parsed)
     else if (name === "remember") root.applyRemember()
+    else if (name === "catalog") return
   }
 
   function applyResolve(parsed) {
@@ -467,22 +572,15 @@ Item {
     }
     if (parsed && parsed.kind === "projects") {
       root.notice = typeof parsed.notice === "string" ? parsed.notice : ""
-      root.view = "projects"
-      root.rows = []
-      root.cursor = 0
-      root.startCommand(["browser", "projects"], "rows")
+      root.show({ kind: "projects" })
       return
     }
     if (!parsed && (root.fileId === "" || root.nodeId === "")) {
-      root.view = "projects"
-      root.rows = []
-      root.cursor = 0
-      root.startCommand(["browser", "projects"], "rows")
+      root.show({ kind: "projects" })
       return
     }
-    root.view = "shot"
     root.notice = ""
-    root.readCurrent()
+    root.show({ kind: "current" })
     root.refreshShot()
   }
 
@@ -493,18 +591,14 @@ Item {
   }
 
   function applyRemember() {
-    root.readCurrent()
-    root.view = "shot"
     root.notice = ""
+    root.show({ kind: "current" })
     root.refreshShot()
   }
 
   function showBrowser() {
     root.notice = ""
-    root.view = "projects"
-    root.rows = []
-    root.cursor = 0
-    root.startCommand(["browser", "projects"], "rows")
+    root.show({ kind: "projects" })
   }
 
   function refreshBrowse() {
@@ -512,8 +606,8 @@ Item {
       root.startCommand(["browser", "pages", root.browseFileId, "--refresh"], "rows")
       return
     }
-    if (root.view === "artboards" && root.browseFileId !== "" && root.browsePageId !== "") {
-      root.startCommand(["browser", "artboards", root.browseFileId, root.browsePageId, "--refresh"], "rows")
+    if (root.view === "shot" && root.listedFileId !== "" && root.listedPageId !== "") {
+      root.startCommand(["artboards", root.listedFileId, root.listedPageId, "--refresh"], "catalog")
       return
     }
     root.startCommand(["browser", "projects", "--refresh"], "rows")
@@ -521,8 +615,7 @@ Item {
 
   function closeBrowser() {
     if (root.fileId !== "" && root.nodeId !== "") {
-      root.view = "shot"
-      root.notice = ""
+      root.show({ kind: "current" })
       return
     }
     if (root.docked) root.undock()
@@ -530,18 +623,16 @@ Item {
   }
 
   function back() {
-    if (root.view === "artboards") {
-      root.view = "pages"
-      root.rows = []
-      root.cursor = 0
-      root.startCommand(["browser", "pages", root.browseFileId], "rows")
+    if (root.view === "shot" && root.pageHold) {
+      root.show({
+        kind: "pages",
+        fileId: root.pageHold.fileId,
+        projectName: root.pageHold.projectName || ""
+      })
       return
     }
     if (root.view === "pages") {
-      root.view = "projects"
-      root.rows = []
-      root.cursor = 0
-      root.startCommand(["browser", "projects"], "rows")
+      root.show({ kind: "projects" })
       return
     }
     root.closeBrowser()
@@ -580,29 +671,26 @@ Item {
     if (!row || row.kind === "header") return
     root.cursor = index
     if (row.kind === "project") {
-      root.browseFileId = row.fileId
-      root.browseProjectName = row.label || ""
-      root.browsePageId = ""
-      root.browsePageName = ""
       root.notice = ""
-      root.view = "pages"
-      root.rows = []
-      root.cursor = 0
-      root.startCommand(["browser", "pages", row.fileId], "rows")
+      root.show({
+        kind: "pages",
+        fileId: row.fileId,
+        projectName: row.label || ""
+      })
       return
     }
     if (row.kind === "page") {
-      root.browseFileId = row.fileId
-      root.browsePageId = row.pageId
-      root.browsePageName = row.label || ""
-      root.view = "artboards"
-      root.rows = []
-      root.cursor = 0
-      root.startCommand(["browser", "artboards", row.fileId, row.pageId], "rows")
+      root.show({
+        kind: "page",
+        fileId: row.fileId,
+        pageId: row.pageId,
+        projectName: root.browseProjectName,
+        pageName: row.label || ""
+      })
       return
     }
-    if (row.kind === "recent" || row.kind === "artboard")
-      root.startCommand(["remember", row.fileId, row.pageId, row.nodeId], "remember")
+    if (row.kind === "recent")
+      root.rememberPlace(row.fileId, row.pageId, row.nodeId)
   }
 
   function rowLabel(row) {
@@ -881,14 +969,18 @@ Item {
   }
 
   FileView {
-    id: artboardsFile
-    path: root.fileId === "" || root.pageId === ""
+    id: catalogFile
+    path: root.listedFileId === "" || root.listedPageId === ""
       ? root.absentCatalog
-      : root.cacheDir + "/artboards/" + root.fileId + "/" + root.pageId + ".json"
+      : root.cacheDir + "/artboards/" + root.listedFileId + "/" + root.listedPageId + ".json"
     watchChanges: true
     blockLoading: true
     printErrors: false
-    onLoaded: root.readNames()
+    onLoaded: {
+      var next = root.parseBoards(text())
+      if (next === null) return
+      root.boards = next
+    }
     onFileChanged: reload()
   }
 
@@ -945,11 +1037,15 @@ Item {
         Item {
           id: headerBar
           width: parent.width
-          height: Math.max(header.implicitHeight, actionLink.implicitHeight, backLink.implicitHeight, floatLink.implicitHeight)
+          height: Math.max(
+            headerBlock.implicitHeight,
+            actionLink.implicitHeight,
+            backLink.implicitHeight,
+            floatLink.implicitHeight)
 
           Text {
             id: backLink
-            visible: root.view === "pages" || root.view === "artboards"
+            visible: root.view === "pages" || (root.view === "shot" && root.pageHold)
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             text: "Back"
@@ -964,19 +1060,35 @@ Item {
             }
           }
 
-          Text {
-            id: header
+          Column {
+            id: headerBlock
             anchors.left: backLink.visible ? backLink.right : parent.left
             anchors.leftMargin: backLink.visible ? Style.spacing.sm : 0
             anchors.right: floatLink.left
             anchors.rightMargin: Style.spacing.sm
             anchors.verticalCenter: parent.verticalCenter
-            text: root.headerText
-            textFormat: Text.PlainText
-            color: Commons.Color.popups.text
-            font.family: Style.menuFontFamily
-            font.pixelSize: Style.font.title
-            elide: Text.ElideRight
+
+            Text {
+              width: headerBlock.width
+              text: root.contextLine
+              textFormat: Text.PlainText
+              color: Commons.Color.popups.text
+              font.family: Style.menuFontFamily
+              font.pixelSize: Style.font.title
+              elide: Text.ElideRight
+            }
+
+            Text {
+              width: headerBlock.width
+              height: Math.max(implicitHeight, Style.font.title)
+              visible: root.view === "shot"
+              text: root.subjectLine
+              textFormat: Text.PlainText
+              wrapMode: Text.WordWrap
+              color: Commons.Color.popups.text
+              font.family: Style.menuFontFamily
+              font.pixelSize: Style.font.title
+            }
           }
 
           Text {
@@ -1028,6 +1140,61 @@ Item {
           font.pixelSize: Style.font.body
         }
 
+        Item {
+          id: footer
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          height: root.rowHeight
+
+          Row {
+            id: footerStatus
+            anchors.left: parent.left
+            anchors.leftMargin: Style.spacing.sm
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.spacing.sm
+
+            Rectangle {
+              width: 8
+              height: 8
+              radius: 4
+              anchors.verticalCenter: parent.verticalCenter
+              color: root.peekStatus === "live"
+                ? Commons.Color.accent
+                : (root.peekStatus === "not-live" ? Commons.Color.urgent : Commons.Color.muted)
+            }
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.peekStatus === "live"
+                ? "Live"
+                : (root.peekStatus === "not-live" ? "Not live" : "Off")
+              textFormat: Text.PlainText
+              color: Commons.Color.popups.text
+              font.family: Style.menuFontFamily
+              font.pixelSize: Style.font.body
+            }
+          }
+
+          Text {
+            id: hintText
+            anchors.left: footerStatus.right
+            anchors.leftMargin: Style.spacing.sm
+            anchors.right: parent.right
+            anchors.rightMargin: Style.spacing.sm
+            anchors.verticalCenter: parent.verticalCenter
+            horizontalAlignment: Text.AlignRight
+            elide: Text.ElideLeft
+            text: root.view === "shot"
+              ? "Refresh · Return browse · F float · Esc close"
+              : "Up Down · Return open · Backspace back · Esc close"
+            textFormat: Text.PlainText
+            color: Commons.Color.muted
+            font.family: Style.menuFontFamily
+            font.pixelSize: Style.font.body
+          }
+        }
+
         Flickable {
           id: browserFlick
           visible: root.view !== "shot"
@@ -1035,8 +1202,7 @@ Item {
           anchors.topMargin: Style.spacing.sm
           anchors.left: parent.left
           anchors.right: parent.right
-          anchors.bottom: parent.bottom
-          anchors.bottomMargin: root.peekStatus === "not-live" ? notLive.implicitHeight + Style.spacing.sm : 0
+          anchors.bottom: footer.top
           clip: true
           focus: (root.opened || root.docked) && root.view !== "shot"
           boundsBehavior: Flickable.StopAtBounds
@@ -1103,14 +1269,13 @@ Item {
           anchors.topMargin: Style.spacing.sm
           anchors.left: parent.left
           anchors.right: parent.right
-          anchors.bottom: parent.bottom
-          anchors.bottomMargin: root.peekStatus === "not-live" ? notLive.implicitHeight + Style.spacing.sm : 0
+          anchors.bottom: footer.top
           clip: true
           focus: (root.opened || root.docked) && root.view === "shot"
           boundsBehavior: Flickable.StopAtBounds
           contentWidth: width
-          contentHeight: shot.height
-          interactive: contentHeight > height
+          contentHeight: stage.height
+          interactive: pair.height > height
           Keys.onPressed: function(event) {
             if (event.key === Qt.Key_Escape) {
               if (root.docked) root.undock()
@@ -1119,52 +1284,106 @@ Item {
               return
             }
             if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-              root.showBrowser()
+              root.show({ kind: "projects" })
               event.accepted = true
               return
             }
             if (event.key === Qt.Key_F) {
               root.enterFloat()
               event.accepted = true
+              return
+            }
+            if (event.key === Qt.Key_Backspace && root.pageHold) {
+              root.back()
+              event.accepted = true
+              return
+            }
+            if (event.key === Qt.Key_Up) {
+              flick.contentY = Math.max(0, flick.contentY - root.rowHeight)
+              event.accepted = true
+              return
+            }
+            if (event.key === Qt.Key_Down) {
+              flick.contentY = Math.min(
+                Math.max(0, flick.contentHeight - flick.height),
+                flick.contentY + root.rowHeight)
+              event.accepted = true
             }
           }
 
-          Image {
-            id: shot
+          Item {
+            id: stage
             width: flick.width
-            asynchronous: true
-            cache: false
-            fillMode: Image.PreserveAspectFit
-            horizontalAlignment: Image.AlignLeft
-            verticalAlignment: Image.AlignTop
-            source: root.shotSource
-            sourceSize.width: Math.max(1, Math.round(width * ((root.docked ? dockWindow.devicePixelRatio : window.devicePixelRatio) || 1)))
-            height: implicitWidth > 0 ? width * implicitHeight / implicitWidth : 0
+            height: root.stageHeight(flick.height, pair.height)
+
+            Column {
+              id: pair
+              width: parent.width
+              spacing: 0
+              y: root.pairY(stage.height, pair.height)
+
+              Image {
+                id: shot
+                width: flick.width
+                asynchronous: true
+                cache: false
+                fillMode: Image.PreserveAspectFit
+                horizontalAlignment: Image.AlignLeft
+                verticalAlignment: Image.AlignTop
+                source: root.shotSource
+                sourceSize.width: Math.max(1, Math.round(width * ((root.docked ? dockWindow.devicePixelRatio : window.devicePixelRatio) || 1)))
+                height: root.shotHere && implicitWidth > 0 ? width * implicitHeight / implicitWidth : 0
+              }
+
+              Text {
+                width: parent.width
+                visible: root.shotHere
+                  && (root.imagePath === "" || shot.status === Image.Error || shot.status === Image.Null)
+                height: visible ? implicitHeight : 0
+                text: "No cached artboard"
+                textFormat: Text.PlainText
+                color: Commons.Color.popups.text
+                font.family: Style.menuFontFamily
+                font.pixelSize: Style.font.body
+              }
+
+              Repeater {
+                model: root.boards
+
+                Rectangle {
+                  required property var modelData
+                  required property int index
+                  property string boardId: modelData ? modelData.id : ""
+                  property string boardLabel: modelData ? modelData.name : ""
+                  width: pair.width
+                  height: root.rowHeight
+                  color: boardId === root.nodeId && root.shotHere
+                    ? Commons.Color.menu.selectedBackground
+                    : "transparent"
+
+                  Text {
+                    anchors.fill: parent
+                    anchors.leftMargin: Style.spacing.sm
+                    anchors.rightMargin: Style.spacing.sm
+                    verticalAlignment: Text.AlignVCenter
+                    text: boardLabel
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    color: boardId === root.nodeId && root.shotHere
+                      ? Commons.Color.menu.selectedText
+                      : Commons.Color.popups.text
+                    font.family: Style.menuFontFamily
+                    font.pixelSize: Style.font.body
+                  }
+
+                  MouseArea {
+                    anchors.fill: parent
+                    onClicked: root.rememberPlace(root.listedFileId, root.listedPageId, boardId)
+                  }
+                }
+              }
+            }
           }
-        }
-
-        Text {
-          anchors.top: noticeText.bottom
-          anchors.topMargin: Style.spacing.sm
-          visible: root.view === "shot" && (root.opened || root.docked) && (root.imagePath === "" || shot.status === Image.Error || shot.status === Image.Null)
-          text: "No cached artboard"
-          textFormat: Text.PlainText
-          color: Commons.Color.popups.text
-          font.family: Style.menuFontFamily
-          font.pixelSize: Style.font.body
-        }
-
-        Text {
-          id: notLive
-          z: 1
-          visible: root.peekStatus === "not-live"
-          text: "not live"
-          textFormat: Text.PlainText
-          anchors.left: parent.left
-          anchors.bottom: parent.bottom
-          color: Commons.Color.popups.text
-          font.family: Style.menuFontFamily
-          font.pixelSize: Style.font.body
         }
       }
     }
