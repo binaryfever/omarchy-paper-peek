@@ -1,3 +1,6 @@
+import { homedir } from "node:os"
+import { join } from "node:path"
+
 const ID_TEXT = /^[A-Za-z0-9_-]+$/
 
 export const RECENT_LIMIT = 5
@@ -44,6 +47,14 @@ export type BrowserRow =
       readonly pageId: string
       readonly nodeId: string
     }
+
+export function memoryFilePath(): string {
+  const override = process.env.PAPER_PEEK_STATE
+  if (override !== undefined && override !== "") return override
+  const stateHome = process.env.XDG_STATE_HOME
+  const root = stateHome !== undefined && stateHome !== "" ? stateHome : join(homedir(), ".local", "state")
+  return join(root, "paper-peek", "current.json")
+}
 
 export function emptyMemory(): PeekMemory {
   return { current: null, byFile: {}, recent: [] }
