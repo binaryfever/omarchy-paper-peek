@@ -111,7 +111,9 @@ async function runTests(): Promise<void> {
   const jpeg = makeMinimalJpeg(8, 6)
   const target = ids()
   const previousLog = process.env.PAPER_PEEK_LOG
+  const previousSettings = process.env.PAPER_PEEK_SETTINGS
   process.env.PAPER_PEEK_LOG = join(dir, "refresh.log")
+  process.env.PAPER_PEEK_SETTINGS = join(dir, "missing-settings.json")
   try {
     let shots = 0
     let seenFile = ""
@@ -514,6 +516,8 @@ async function runTests(): Promise<void> {
   } finally {
     if (previousLog === undefined) delete process.env.PAPER_PEEK_LOG
     else process.env.PAPER_PEEK_LOG = previousLog
+    if (previousSettings === undefined) delete process.env.PAPER_PEEK_SETTINGS
+    else process.env.PAPER_PEEK_SETTINGS = previousSettings
     await rm(dir, { recursive: true, force: true })
   }
 

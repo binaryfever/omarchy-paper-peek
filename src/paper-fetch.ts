@@ -3,6 +3,7 @@ import {
   GONE_NOTICE,
   artboardRows,
   forgetArtboard,
+  memoryFilePath,
   memoryText,
   pageRows,
   parseMemory,
@@ -17,6 +18,8 @@ import { appendFile, mkdir, readdir, readFile, rename, writeFile } from "node:fs
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
+import { commitFile } from "./durable-file.ts"
+import { readShotStamp, shotJpegPath, sidecarNote, storeShot } from "./shot-cache.ts"
 import { configuredPaperUrl, ensureSettingsDir, installHotkeys, loadSettings, settingsPayload } from "./settings.ts"
 
 declare const fileIdBrand: unique symbol
@@ -285,7 +288,18 @@ export async function fetchArtboard(
     const raw = await postTool(source, "get_screenshot", target)
     const frame = jpegFromToolResult(raw)
     if (frame instanceof Fail) return storedShot(source, target, frame.reason)
-    await storeShot(cacheDirOf(source), target, frame, fileUpdatedAt(loaded.raw, target.fileId))
+    const cacheDir = cacheDirOf(source)
+    const placed = await findCachedArtboard(cacheDir, target)
+    await storeShot({
+      cacheDir,
+      fileId: target.fileId,
+      nodeId: target.nodeId,
+      bytes: frame.bytes,
+      note: frame.note,
+      name: placed === null ? null : placed.name,
+      page: placed === null ? null : placed.page,
+      updatedAt: fileUpdatedAt(loaded.raw, target.fileId),
+    })
     const stored = await readArtboard(source, target)
     if (stored.kind !== "cached") return { kind: "unavailable", reason: "bad-image" }
     return { kind: "fresh", image: stored.image }
@@ -305,7 +319,7 @@ export async function watchArtboard(
   if (gate.kind === "refuse") return { kind: "unchanged" }
   const stamp = fileUpdatedAt(loaded.raw, target.fileId)
   if (stamp === null) return { kind: "unchanged" }
-  const seen = await readShotStamp(cacheDirOf(source), target)
+  const seen = await readShotStamp(cacheDirOf(source), target.fileId, target.nodeId)
   if (seen === stamp) return { kind: "unchanged" }
   return { kind: "changed" }
 }
@@ -340,7 +354,7 @@ export async function readArtboard(
   source: PaperSource,
   target: ArtboardTarget,
 ): Promise<StoredArtboard> {
-  const jpegPath = shotJpegPath(cacheDirOf(source), target)
+  const jpegPath = shotJpegPath(cacheDirOf(source), target.fileId, target.nodeId)
   let bytes: Uint8Array
   try {
     bytes = await readFile(jpegPath)
@@ -357,7 +371,7 @@ export async function readArtboard(
       width: size.width,
       height: size.height,
       byteLength: bytes.byteLength,
-      note: await sidecarNote(cacheDirOf(source), target, bytes.byteLength),
+      note: await sidecarNote(cacheDirOf(source), target.fileId, target.nodeId, bytes.byteLength),
       imagePath: jpegPath,
     },
   }
@@ -678,45 +692,6 @@ async function storedShot(
   return { kind: "unavailable", reason }
 }
 
-async function storeShot(
-  dir: string,
-  target: ArtboardTarget,
-  frame: Frame,
-  updatedAt: number | null,
-): Promise<void> {
-  const placed = await findCachedArtboard(dir, target)
-  await commitFile(shotJpegPath(dir, target), frame.bytes)
-  const record: {
-    name: string | null
-    file: FileId
-    page: string | null
-    timestamp: string
-    note: string | null
-    byteLength: number
-    updatedAt?: number
-  } = {
-    name: placed === null ? null : placed.name,
-    file: target.fileId,
-    page: placed === null ? null : placed.page,
-    timestamp: new Date().toISOString(),
-    note: frame.note,
-    byteLength: frame.bytes.byteLength,
-  }
-  if (updatedAt !== null) record.updatedAt = updatedAt
-  await commitFile(shotSidecarPath(dir, target), textBytes(JSON.stringify(record)))
-}
-
-async function readShotStamp(dir: string, target: ArtboardTarget): Promise<number | null> {
-  try {
-    const parsed = JSON.parse(await readFile(shotSidecarPath(dir, target), "utf8")) as unknown
-    if (!isRecord(parsed)) return null
-    if (typeof parsed.updatedAt !== "number" || !Number.isFinite(parsed.updatedAt)) return null
-    return parsed.updatedAt
-  } catch {
-    return null
-  }
-}
-
 function fileUpdatedAt(raw: unknown, fileId: FileId): number | null {
   const page = wirePage(raw)
   if (page === null) return null
@@ -751,22 +726,6 @@ function wirePage(
     items.push(item)
   }
   return { items, truncated: page.truncated === true }
-}
-
-async function sidecarNote(
-  dir: string,
-  target: ArtboardTarget,
-  byteLength: number,
-): Promise<string | null> {
-  try {
-    const parsed = JSON.parse(await readFile(shotSidecarPath(dir, target), "utf8")) as unknown
-    if (!isRecord(parsed) || parsed.byteLength !== byteLength) return null
-    if (parsed.note === null) return null
-    if (typeof parsed.note !== "string") return null
-    return parsed.note
-  } catch {
-    return null
-  }
 }
 
 function parseStoredIndex(value: unknown): ProjectIndex | null {
@@ -991,21 +950,6 @@ async function findCachedArtboard(
   return null
 }
 
-function shotJpegPath(dir: string, target: ArtboardTarget): string {
-  return join(dir, "shots", target.fileId, `${target.nodeId}.jpg`)
-}
-
-function shotSidecarPath(dir: string, target: ArtboardTarget): string {
-  return join(dir, "shots", target.fileId, `${target.nodeId}.json`)
-}
-
-async function commitFile(dest: string, bytes: Uint8Array): Promise<void> {
-  await mkdir(dirname(dest), { recursive: true })
-  const temp = `${dest}.${process.pid}.tmp`
-  await writeFile(temp, bytes)
-  await rename(temp, dest)
-}
-
 function cacheDirOf(source: PaperSource): string {
   const backend = backendOf(source)
   return backend.kind === "live" ? backend.cacheDir : backend.script.cacheDir
@@ -1019,12 +963,6 @@ function backendOf(source: PaperSource): Backend {
 
 function stateHome(): string {
   return envValue("XDG_STATE_HOME") ?? join(homedir(), ".local", "state")
-}
-
-function currentArtboardPath(): string {
-  const override = envValue("PAPER_PEEK_STATE")
-  if (override !== null && override !== "") return override
-  return join(stateHome(), "paper-peek", "current.json")
 }
 
 function statusFilePath(): string {
@@ -1047,7 +985,7 @@ async function logRefresh(line: string): Promise<void> {
 
 async function readCurrentArtboardText(): Promise<string> {
   try {
-    return await readFile(currentArtboardPath(), "utf8")
+    return await readFile(memoryFilePath(), "utf8")
   } catch {
     return ""
   }
@@ -1120,7 +1058,7 @@ async function readMemory(): Promise<PeekMemory> {
 
 async function writeMemory(memory: PeekMemory): Promise<void> {
   const text = memoryText(memory)
-  const path = currentArtboardPath()
+  const path = memoryFilePath()
   let previous = ""
   try {
     previous = await readFile(path, "utf8")
