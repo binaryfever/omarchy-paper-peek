@@ -143,7 +143,8 @@ drive_bar_label() {
   printf '%s\n' "$run_id" >"$scratch/$marker_name"
   trap cleanup_scratch EXIT
 
-  if ! doctor >"$evidence/doctor.txt" 2>"$evidence/doctor.err"; then
+  # die() exits the process. A subshell lets a refusal still write result.txt.
+  if ! (doctor) >"$evidence/doctor.txt" 2>"$evidence/doctor.err"; then
     echo "result: fail" >"$evidence/result.txt"
     echo "feature: bar-label" >>"$evidence/result.txt"
     echo "entry: top-bar-left" >>"$evidence/result.txt"
