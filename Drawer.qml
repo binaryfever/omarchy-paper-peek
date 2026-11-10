@@ -813,18 +813,18 @@ Item {
       x: headerStrip.cols.textX
       y: root.chrome.columnGap
       width: headerStrip.cols.titleWidth
-      spacing: 0
+      spacing: root.chrome.titleGap
 
       Text {
         width: parent.width
         text: root.headerCopy.title
         textFormat: Text.PlainText
-        wrapMode: Text.Wrap
-        elide: Text.ElideNone
+        maximumLineCount: 1
+        wrapMode: Text.NoWrap
+        elide: Text.ElideRight
         color: root.ink
         font.family: Style.menuFontFamily
         font.pixelSize: Style.font.title
-        font.bold: true
       }
 
       Text {
@@ -875,6 +875,12 @@ Item {
     id: statusLine
     height: root.chrome.footerHeight
     readonly property var cols: Layout.columns(width, root.chrome, 0)
+
+    PanelSeparator {
+      anchors.top: parent.top
+      width: parent.width
+      foreground: root.ink
+    }
 
     Rectangle {
       x: statusLine.cols.textX
@@ -1014,6 +1020,7 @@ Item {
       height: parent.height
       visible: rowItem.face.presentation === "recent"
       verticalAlignment: Text.AlignVCenter
+      horizontalAlignment: Text.AlignRight
       text: rowItem.slot.detail
       textFormat: Text.PlainText
       elide: Text.ElideRight
@@ -1024,7 +1031,9 @@ Item {
 
     Text {
       x: rowItem.cols.textX
-      width: rowItem.cols.textWidth
+      width: Math.max(
+        0,
+        rowItem.cols.textWidth - (rowOrdinal.visible ? rowOrdinal.width + root.chrome.columnGap : 0))
       height: parent.height
       visible: rowItem.face.presentation === "single"
       verticalAlignment: Text.AlignVCenter
@@ -1034,6 +1043,22 @@ Item {
       color: (rowItem.flags.hasCursor || rowItem.flags.current) ? Commons.Color.menu.selectedText : root.ink
       font.family: Style.menuFontFamily
       font.pixelSize: Style.font.body
+    }
+
+    Text {
+      id: rowOrdinal
+      x: rowItem.cols.textX + rowItem.cols.textWidth - width
+      width: Math.min(implicitWidth, rowItem.cols.textWidth)
+      height: parent.height
+      visible: rowItem.face.presentation === "single" && rowItem.slot.detail !== ""
+      horizontalAlignment: Text.AlignRight
+      verticalAlignment: Text.AlignVCenter
+      text: rowItem.slot.detail
+      textFormat: Text.PlainText
+      elide: Text.ElideRight
+      color: root.inkSecondary
+      font.family: Style.menuFontFamily
+      font.pixelSize: Style.font.caption
     }
 
     MouseArea {
@@ -1051,10 +1076,7 @@ Item {
     id: floatStripItem
     height: root.chrome.controlHeight
     clip: true
-    readonly property var cols: Layout.columns(
-      width,
-      root.chrome,
-      root.chrome.dot + root.chrome.columnGap + passButton.width)
+    readonly property var cols: Layout.columns(width, root.chrome, passButton.width)
 
     Rectangle {
       anchors.fill: parent
@@ -1067,29 +1089,28 @@ Item {
       foreground: root.ink
     }
 
-    Text {
-      x: floatStripItem.cols.textX
-      width: floatStripItem.cols.titleWidth
-      anchors.verticalCenter: parent.verticalCenter
-      text: root.floatName
-      textFormat: Text.PlainText
-      elide: Text.ElideNone
-      wrapMode: Text.NoWrap
-      maximumLineCount: 1
-      color: root.ink
-      font.family: Style.menuFontFamily
-      font.pixelSize: Style.font.title
-      font.bold: true
-    }
-
     Rectangle {
-      anchors.right: passButton.left
-      anchors.rightMargin: root.chrome.columnGap
+      id: floatDot
+      x: floatStripItem.cols.textX
       anchors.verticalCenter: parent.verticalCenter
       width: root.chrome.dot
       height: root.chrome.dot
       radius: height / 2
       color: root.dotColor(root.peekStatus)
+    }
+
+    Text {
+      x: floatDot.x + floatDot.width + root.chrome.columnGap
+      width: Math.max(0, floatStripItem.cols.titleWidth - root.chrome.dot - root.chrome.columnGap)
+      anchors.verticalCenter: parent.verticalCenter
+      text: root.floatName
+      textFormat: Text.PlainText
+      elide: Text.ElideRight
+      wrapMode: Text.NoWrap
+      maximumLineCount: 1
+      color: root.ink
+      font.family: Style.menuFontFamily
+      font.pixelSize: Style.font.body
     }
 
     Rectangle {
@@ -1545,10 +1566,17 @@ Item {
 
       Image {
         id: floatShot
-        anchors.top: floatStrip.bottom
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
+        // The card's own margin, kept here rather than in anchors, so the
+        // artboard never sits on the card's border or under the strip's rule.
+        readonly property int inset:
+          floatCard.width > root.chrome.gutter * 4
+            && floatCard.height - floatStrip.height > root.chrome.gutter * 4
+            ? root.chrome.gutter
+            : 0
+        x: inset
+        y: floatStrip.height + inset
+        width: Math.max(0, floatCard.width - inset * 2)
+        height: Math.max(0, floatCard.height - floatStrip.height - inset * 2)
         asynchronous: true
         cache: false
         fillMode: Image.PreserveAspectFit

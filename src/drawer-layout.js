@@ -18,7 +18,13 @@ function chrome(tokens) {
     rule: rule,
     footerHeight: rowHeight,
     columnGap: tokens.lg,
+    titleGap: tokens.sm,
     dot: tokens.sm * 2,
+    // The layout canvas draws the artboard 480 wide by 580 tall. Tying the cap
+    // to the drawer's own width keeps a 393 by 852 artboard at the size it was
+    // drawn at on any screen, instead of growing with the screen's height.
+    // The cap measures the image's box. The pane adds a margin around it.
+    shotAspect: 1.2,
     boardRows: 4,
     floorRows: 1,
     secondaryDarken: 1.4,
@@ -136,22 +142,35 @@ function slotsFromBoards(boards, fileId, pageId) {
       }
     }
   }
-  var captionLabel = kept.length === 1 ? "1 artboard" : kept.length + " artboards"
   var out = [
     {
       kind: "caption",
-      label: captionLabel,
+      label: "Artboards \u00B7 " + kept.length,
       detail: "",
       fileId: "",
       pageId: "",
       nodeId: "",
     },
   ]
+  // A page can hold several artboards under one name. Paper tells them apart
+  // by node id, which never reaches the row, so the row carries its ordinal.
+  var total = {}
   for (i = 0; i < kept.length; i++) {
+    var countKey = "n:" + kept[i].name
+    total[countKey] = (total[countKey] || 0) + 1
+  }
+  var seen = {}
+  for (i = 0; i < kept.length; i++) {
+    var key = "n:" + kept[i].name
+    var detail = ""
+    if (total[key] > 1) {
+      seen[key] = (seen[key] || 0) + 1
+      detail = seen[key] + " of " + total[key]
+    }
     out.push({
       kind: "artboard",
       label: kept[i].name,
-      detail: "",
+      detail: detail,
       fileId: fileId,
       pageId: pageId,
       nodeId: kept[i].id,
@@ -402,19 +421,40 @@ function contentFrame(view, contentWidth, contentHeight, imageWidth, imageHeight
       },
     }
   }
-  var image = containFit(contentWidth, pickedShotHeight, imageWidth, imageHeight)
+  // The shot stops at its cap. A taller screen spends the rest on rows, so the
+  // artboard stays the size the canvas drew it at instead of filling the drawer.
+  var cap = Math.round(contentWidth * chromeRef.shotAspect) + chromeRef.gutter * 2
+  var shotHeight = pickedShotHeight
+  if (cap > 0 && shotHeight > cap) {
+    shotHeight = cap
+    pickedWell = contentHeight - chromeRef.rule - shotHeight
+  }
+  // Contain-fit lands one of the image's axes on the pane's edge: the width
+  // for a landscape artboard, the height for a portrait one. The image keeps a
+  // margin on all four sides so no edge sits on the border or on a rule. Rows
+  // still bleed to the drawer's edge.
+  var insetX = contentWidth > chromeRef.gutter * 4 ? chromeRef.gutter : 0
+  var insetY = shotHeight > chromeRef.gutter * 4 ? chromeRef.gutter : 0
+  var image = containFit(
+    contentWidth - insetX * 2,
+    shotHeight - insetY * 2,
+    imageWidth,
+    imageHeight,
+  )
+  image.x = image.x + insetX
+  image.y = image.y + insetY
   return {
     shot: {
       scroll: "none",
       fit: "contain",
-      height: pickedShotHeight,
+      height: shotHeight,
       image: image,
     },
     rule: chromeRef.rule,
     list: {
       id: "boards",
       scroll: "self",
-      y: pickedShotHeight + chromeRef.rule,
+      y: shotHeight + chromeRef.rule,
       height: pickedWell,
     },
   }

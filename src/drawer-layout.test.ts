@@ -159,16 +159,33 @@ const fourBoards = Layout.slotsFromBoards(
   "file",
   "page",
 )
-assert(fourBoards[0]?.kind === "caption" && fourBoards[0]?.label === "4 artboards", "four boards caption")
+assert(fourBoards[0]?.kind === "caption" && fourBoards[0]?.label === "Artboards \u00B7 4", "four boards caption")
 assert(fourBoards.length === 5, "four boards plus caption")
+assert(fourBoards[1]?.detail === "1 of 4", "first duplicate name carries its ordinal")
+assert(fourBoards[4]?.detail === "4 of 4", "last duplicate name carries its ordinal")
+
+const mixedNames = Layout.slotsFromBoards(
+  [
+    { id: "a", name: "01 Light \u00B7 Home" },
+    { id: "b", name: "Solo" },
+    { id: "c", name: "01 Light \u00B7 Home" },
+  ],
+  "file",
+  "page",
+)
+assert(mixedNames[1]?.detail === "1 of 2", "repeat counts only its own name")
+assert(mixedNames[2]?.detail === "", "a name used once gets no ordinal")
+assert(mixedNames[3]?.detail === "2 of 2", "the second of a repeated name counts in page order")
 const changedId = Layout.slotsFromBoards([{ id: "a", name: "01 Light · Home" }], "file", "page")
 assert(!Layout.sameSlots(fourBoards, changedId), "sameSlots false when id set changes")
 assert(Layout.sameSlots(fourBoards, fourBoards.map((slot) => ({ ...slot }))), "sameSlots true for deep copy")
 
 const zeroBoards = Layout.slotsFromBoards([], "f", "p")
-assert(zeroBoards[0]?.label === "0 artboards", "zero boards caption")
+assert(zeroBoards[0]?.label === "Artboards \u00B7 0", "zero boards caption")
 const oneBoard = Layout.slotsFromBoards([{ id: "x", name: "Solo" }], "f", "p")
-assert(oneBoard[0]?.label === "1 artboard", "one board caption")
+assert(oneBoard[0]?.label === "Artboards \u00B7 1", "one board caption")
+assert(oneBoard[1]?.detail === "", "a lone artboard gets no ordinal")
+assert(defaultChrome.titleGap > 0, "header title and trail are kept apart")
 
 const leadCaption = Layout.slotsFromBrowserJson([{ kind: "header", label: "Projects" }, { kind: "project", label: "A", fileId: "1" }])
 assert(Layout.placeCursor(leadCaption) === 1, "placeCursor skips leading caption")
@@ -191,20 +208,42 @@ const listHeightAtFour =
 const tallFrame = Layout.contentFrame("shot", 480, 800, 393, 852, defaultChrome)
 assert(tallFrame.shot !== null && tallFrame.shot.scroll === "none", "tall shot does not scroll")
 assert(tallFrame.list.scroll === "self" && tallFrame.list.id === "boards", "tall list scrolls")
-assert(tallFrame.list.height === listHeightAtFour, "tall list is caption plus four rows")
-assert(tallFrame.shot !== null && tallFrame.shot.height === 800 - defaultChrome.rule - tallFrame.list.height, "tall shot takes remainder")
+const shotCap = Math.round(480 * defaultChrome.shotAspect) + defaultChrome.gutter * 2
+assert(tallFrame.shot !== null && tallFrame.shot.height === shotCap, "tall shot stops at its cap")
+assert(tallFrame.list.height > listHeightAtFour, "the room past the cap goes to the rows")
+assert(tallFrame.list.height === 800 - defaultChrome.rule - tallFrame.shot.height, "tall list takes the remainder")
+assert(tallFrame.list.y === tallFrame.shot.height + defaultChrome.rule, "tall list sits under the rule")
+
+const tallerFrame = Layout.contentFrame("shot", 480, 1268, 393, 852, defaultChrome)
+assert(tallerFrame.shot !== null && tallerFrame.shot.height === shotCap, "a taller screen does not grow the shot")
+assert(
+  tallerFrame.shot !== null && tallerFrame.shot.image.width < 480,
+  "a portrait artboard no longer fills the drawer width",
+)
+assert(tallerFrame.list.height > tallFrame.list.height, "a taller screen grows the rows instead")
+
+const wideDrawer = Layout.contentFrame("shot", 960, 2000, 393, 852, defaultChrome)
+assert(
+  wideDrawer.shot !== null &&
+    wideDrawer.shot.height ===
+      Math.round(960 * defaultChrome.shotAspect) + defaultChrome.gutter * 2,
+  "the cap follows the drawer width",
+)
 
 if (tallFrame.shot) {
   const img = tallFrame.shot.image
   assert(img.x >= 0 && img.y >= 0, "image inside shot box")
   assert(img.x + img.width <= 480 + 0.001, "image inside width")
   assert(img.y + img.height <= tallFrame.shot.height + 0.001, "image inside height")
-  const touchesEdge =
-    img.x <= 1 ||
-    img.y <= 1 ||
-    img.x + img.width >= 480 - 1 ||
-    img.y + img.height >= tallFrame.shot.height - 1
-  assert(touchesEdge, "image touches a shot box edge")
+  const pad = defaultChrome.gutter
+  assert(img.x >= pad && img.y >= pad, "image keeps its margin at the near edges")
+  assert(
+    img.x + img.width <= 480 - pad && img.y + img.height <= tallFrame.shot.height - pad,
+    "image keeps its margin at the far edges",
+  )
+  const fillsAnAxis =
+    img.width >= 480 - pad * 2 - 1 || img.height >= tallFrame.shot.height - pad * 2 - 1
+  assert(fillsAnAxis, "image fills one axis of the box inside those margins")
   const again = Layout.contentFrame("shot", 480, 800, img.width, img.height, defaultChrome)
   assert(
     again.shot !== null &&
@@ -215,6 +254,27 @@ if (tallFrame.shot) {
     "containFit is idempotent on fitted size",
   )
 }
+
+const wideShot = Layout.contentFrame("shot", 480, 1268, 1920, 1080, defaultChrome)
+assert(
+  wideShot.shot !== null && wideShot.shot.image.x >= defaultChrome.gutter,
+  "a landscape artboard keeps a margin at the near edge",
+)
+assert(
+  wideShot.shot !== null &&
+    wideShot.shot.image.x + wideShot.shot.image.width <= 480 - defaultChrome.gutter,
+  "a landscape artboard keeps a margin at the far edge",
+)
+assert(
+  tallerFrame.shot !== null &&
+    tallerFrame.shot.image.height === tallerFrame.shot.height - defaultChrome.gutter * 2,
+  "a portrait artboard fills the box inside the margins, not the pane",
+)
+assert(
+  tallerFrame.shot !== null &&
+    tallerFrame.shot.image.height === Math.round(480 * defaultChrome.shotAspect),
+  "a portrait artboard keeps the size the canvas drew, margins on top of it",
+)
 
 const shortFrame = Layout.contentFrame("shot", 480, 100, 393, 852, defaultChrome)
 assert(shortFrame.list.height === 72, "short content uses two-row well")
