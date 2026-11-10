@@ -13,7 +13,15 @@ function chrome(tokens) {
   return {
     gutter: tokens.rowPaddingX,
     rowHeight: rowHeight,
-    captionHeight: tokens.captionHeight,
+    // A box's padding reads as one frame, so the header's top and bottom match
+    // the gutter down its sides rather than running tighter.
+    framePadY: tokens.rowPaddingX,
+    // A section label belongs to the rows under it, not to the rule over it, so
+    // two gutters of air go above it. Nothing goes below: the first row's own
+    // lead-in already holds the label off its list, and widening that gap would
+    // only cut the label loose from the thing it names.
+    captionLead: tokens.rowPaddingX * 2,
+    captionHeight: tokens.captionHeight + tokens.rowPaddingX * 2,
     controlHeight: tokens.controlHeight,
     rule: rule,
     footerHeight: rowHeight,
@@ -446,6 +454,18 @@ function contentFrame(view, contentWidth, contentHeight, imageWidth, imageHeight
   )
   image.x = image.x + insetX
   image.y = image.y + insetY
+  // The cap is a ceiling, not a height. A pane sized for a portrait phone held
+  // a wide artboard in 73 pixels of ink and 527 pixels of nothing, which reads
+  // as three unrelated panels rather than one. The pane now stops at the
+  // artboard it holds, and the rows take back what it does not need.
+  if (imageWidth > 0 && imageHeight > 0) {
+    var fitted = image.height + insetY * 2
+    if (fitted < shotHeight) {
+      shotHeight = fitted
+      image.y = insetY
+      pickedWell = contentHeight - chromeRef.rule - shotHeight
+    }
+  }
   return {
     shot: {
       scroll: "none",

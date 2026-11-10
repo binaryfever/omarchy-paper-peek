@@ -192,6 +192,15 @@ const oneBoard = Layout.slotsFromBoards([{ id: "x", name: "Solo" }], "f", "p")
 assert(oneBoard[0]?.label === "Artboards \u00B7 1", "one board caption")
 assert(oneBoard[1]?.detail === "", "a lone artboard gets no ordinal")
 assert(defaultChrome.titleGap > 0, "header title and trail are kept apart")
+assert(
+  defaultChrome.captionLead > defaultChrome.rowHeight / 2,
+  "a section label takes real air above it, so it breaks from the rule over it",
+)
+assert(
+  defaultChrome.captionHeight === defaultTokens.captionHeight + defaultChrome.captionLead,
+  "the caption slot carries its lead and nothing under it",
+)
+assert(defaultChrome.framePadY === defaultChrome.gutter, "a box pads evenly on all four sides")
 
 const leadCaption = Layout.slotsFromBrowserJson([{ kind: "header", label: "Projects" }, { kind: "project", label: "A", fileId: "1" }])
 assert(Layout.placeCursor(leadCaption) === 1, "placeCursor skips leading caption")
@@ -271,6 +280,43 @@ assert(
     wideShot.shot.image.x + wideShot.shot.image.width <= 480 - defaultChrome.gutter,
   "a landscape artboard keeps a margin at the far edge",
 )
+// The cap is a ceiling. A landscape artboard is shorter than a portrait one,
+// so its pane stops at the artboard instead of holding it in a void.
+assert(
+  wideShot.shot !== null &&
+    wideShot.shot.height === wideShot.shot.image.height + defaultChrome.gutter * 2,
+  "a landscape pane stops at its artboard",
+)
+assert(
+  wideShot.shot !== null && wideShot.shot.height < Math.round(480 * defaultChrome.shotAspect),
+  "a landscape pane comes in under the cap",
+)
+assert(
+  wideShot.shot !== null && wideShot.shot.image.y === defaultChrome.gutter,
+  "a fitted pane keeps its top margin and no more",
+)
+assert(
+  wideShot.list.height === 1268 - defaultChrome.rule - wideShot.shot.height,
+  "the room the pane gives up goes to the rows",
+)
+
+// A very wide artboard is the case that showed the problem: 1440 by 250 drew
+// 73 pixels of artboard inside a 600 pixel pane.
+const squatShot = Layout.contentFrame("shot", 480, 1350, 1440, 250, defaultChrome)
+assert(squatShot.shot !== null && squatShot.shot.height < 120, "a squat artboard gets a squat pane")
+assert(
+  squatShot.list.height > 1100,
+  "a squat artboard hands more than 1100 pixels to the rows",
+)
+
+// An unmeasured artboard has no shape to fit, so the pane stays at its cap
+// until the image reports one.
+const unknownShot = Layout.contentFrame("shot", 480, 1350, 0, 0, defaultChrome)
+assert(
+  unknownShot.shot !== null &&
+    unknownShot.shot.height === Math.round(480 * defaultChrome.shotAspect) + defaultChrome.gutter * 2,
+  "an unmeasured artboard holds the cap",
+)
 assert(
   tallerFrame.shot !== null &&
     tallerFrame.shot.image.height === tallerFrame.shot.height - defaultChrome.gutter * 2,
@@ -283,9 +329,20 @@ assert(
 )
 
 const shortFrame = Layout.contentFrame("shot", 480, 100, 393, 852, defaultChrome)
-assert(shortFrame.list.height === 72, "short content uses two-row well")
+assert(
+  shortFrame.list.height === defaultChrome.captionHeight + defaultChrome.rowHeight * 2,
+  "short content uses two-row well",
+)
 assert(shortFrame.rule === 1, "short content keeps rule")
-assert(shortFrame.shot !== null && shortFrame.shot.height === 27, "short shot height")
+assert(
+  shortFrame.shot !== null && shortFrame.shot.height > 0,
+  "short content still shows some artboard",
+)
+assert(
+  shortFrame.shot !== null &&
+    shortFrame.shot.height === 100 - defaultChrome.rule - shortFrame.list.height,
+  "short content spends every pixel it has",
+)
 
 const tinyFrame = Layout.contentFrame("shot", 480, 40, 393, 852, defaultChrome)
 assert(tinyFrame.shot === null && tinyFrame.rule === 0 && tinyFrame.list.height === 40, "tiny content drops shot")
