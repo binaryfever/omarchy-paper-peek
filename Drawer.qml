@@ -4,6 +4,8 @@ import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
+import qs.Ui
+import "src/drawer-layout.js" as Layout
 
 Item {
   id: root
@@ -26,15 +28,19 @@ Item {
   property bool openIntoBrowser: false
   property bool settingsQueued: false
   property bool hotkeysQueued: false
-  readonly property int rowHeight: Style.font.body + Style.spacing.lg * 2
 
   property string fileId: ""
   property string pageId: ""
   property string nodeId: ""
   property string projectName: ""
   property string pageName: ""
+  property string artboardName: ""
   property var pageHold: null
-  property var boards: []
+  property var browserSlots: []
+  property var boardSlots: []
+  property int cursor: -1
+  property real shotNaturalW: 0
+  property real shotNaturalH: 0
   property string imagePath: ""
   property int shotRevision: 0
   property string peekStatus: "off"
@@ -42,8 +48,6 @@ Item {
   property string notice: ""
   property string pending: ""
   property var queued: null
-  property var rows: []
-  property int cursor: 0
   property string browseFileId: ""
   property string browseProjectName: ""
 
@@ -70,6 +74,140 @@ Item {
 
   readonly property string shotSource: imagePath === "" ? "" : (Util.fileUrl(imagePath) + (shotRevision > 0 ? ("?v=" + shotRevision) : ""))
 
+  readonly property color ink: Commons.Color.popups.text
+  readonly property var chrome: Layout.chrome(styleTokens())
+  readonly property color inkSecondary: Qt.darker(ink, chrome.secondaryDarken)
+  readonly property color inkEmpty: Qt.darker(ink, chrome.emptyDarken)
+  readonly property var activeSlots: view === "shot" ? boardSlots : browserSlots
+  readonly property var frame: Layout.contentFrame(
+    view,
+    content.width,
+    content.height,
+    shotHere ? shotNaturalW : 0,
+    shotHere ? shotNaturalH : 0,
+    chrome)
+  readonly property var headerCopy: Layout.drawerHeader(headerInput())
+  readonly property string floatName: Layout.floatTitle(Layout.artboardLabel(boardSlots, nodeId), artboardName)
+
+  onListedFileIdChanged: boardSlots = []
+  onListedPageIdChanged: boardSlots = []
+  onActiveSlotsChanged: {
+    if (regionList) regionList.contentY = 0
+  }
+
+  function styleTokens() {
+    return {
+      rowPaddingX: Style.spacing.rowPaddingX,
+      body: Style.font.body,
+      lg: Style.spacing.lg,
+      sm: Style.spacing.sm,
+      controlHeight: Style.spacing.controlHeight,
+      hairline: Style.spacing.hairline,
+      captionHeight: captionProbe.implicitHeight,
+      popupRowHeight: Style.spacing.popupRowHeight
+    }
+  }
+
+  function headerInput() {
+    var hold = root.pageHold
+    return {
+      view: root.view,
+      shotHere: root.shotHere,
+      holding: hold !== null,
+      projectName: root.projectName,
+      projectId: root.fileId,
+      pageName: root.pageName,
+      pageId: root.pageId,
+      browseProject: root.browseProjectName,
+      browseFileId: root.browseFileId,
+      catalogArtboard: Layout.artboardLabel(root.boardSlots, root.nodeId),
+      memoryArtboard: root.artboardName,
+      holdProject: hold && hold.projectName ? hold.projectName : "",
+      holdPage: hold && hold.pageName ? hold.pageName : ""
+    }
+  }
+
+  function dotColor(status) {
+    var role = Layout.statusDot(status)
+    if (role === "accent") return Commons.Color.accent
+    if (role === "urgent") return Commons.Color.urgent
+    return Commons.Color.muted
+  }
+
+  function runAction(id) {
+    if (id === "back") root.back()
+    else if (id === "float") root.enterFloat()
+    else if (id === "browse") root.showBrowser()
+    else if (id === "refresh") root.refreshBrowse()
+  }
+
+  function activateSlot(index) {
+    var slot = root.activeSlots[index]
+    if (!slot) return
+    if (root.view !== "shot" && Layout.classify(slot).selectable) root.cursor = index
+    var act = Layout.activation(slot, root.browseProjectName)
+    if (act.type === "pages") {
+      root.notice = ""
+      root.show({ kind: "pages", fileId: act.fileId, projectName: act.projectName })
+      return
+    }
+    if (act.type === "page") {
+      root.show({
+        kind: "page",
+        fileId: act.fileId,
+        pageId: act.pageId,
+        projectName: act.projectName,
+        pageName: act.pageName
+      })
+      return
+    }
+    if (act.type === "remember") root.rememberPlace(act.fileId, act.pageId, act.nodeId)
+  }
+
+  function paneKey(event) {
+    if (event.key === Qt.Key_Escape) {
+      if (root.view === "shot") {
+        if (root.docked) root.undock()
+        else root.close("")
+      } else {
+        root.closeBrowser()
+      }
+      event.accepted = true
+      return
+    }
+    if (event.key === Qt.Key_F) {
+      root.runAction("float")
+      event.accepted = true
+      return
+    }
+    if (event.key === Qt.Key_Backspace) {
+      root.runAction("back")
+      event.accepted = true
+      return
+    }
+    if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+      var delta = event.key === Qt.Key_Up ? -1 : 1
+      if (root.view === "shot") {
+        regionList.contentY = Layout.scrollBy(
+          regionList.contentY,
+          delta,
+          root.chrome,
+          regionList.contentHeight,
+          regionList.height)
+      } else {
+        root.cursor = Layout.moveCursor(root.activeSlots, root.cursor, delta)
+        if (root.cursor >= 0) regionList.positionViewAtIndex(root.cursor, ListView.Contain)
+      }
+      event.accepted = true
+      return
+    }
+    if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+      if (root.view === "shot") root.runAction("browse")
+      else root.activateSlot(root.cursor)
+      event.accepted = true
+    }
+  }
+
   function applyStatus(text) {
     var word = String(text || "").trim()
     if (word === "live" || word === "not-live" || word === "off") root.peekStatus = word
@@ -79,34 +217,6 @@ Item {
     if (statusProbe.running) return
     statusProbe.running = true
   }
-
-  readonly property string contextLine: {
-    if (root.view === "projects") return "Projects"
-    if (root.view === "pages")
-      return root.browseProjectName !== "" ? root.browseProjectName : root.browseFileId
-    if (root.view !== "shot") return "Paper Peek"
-    if (root.pageHold) {
-      var holdProject = root.pageHold.projectName !== "" ? root.pageHold.projectName : root.pageHold.fileId
-      var holdPage = root.pageHold.pageName !== "" ? root.pageHold.pageName : root.pageHold.pageId
-      if (holdPage === "") return holdProject
-      return holdProject + " › " + holdPage
-    }
-    if (fileId === "") return "Paper Peek"
-    var shotProject = projectName !== "" ? projectName : fileId
-    var shotPage = pageName !== "" ? pageName : pageId
-    if (shotPage === "") return shotProject
-    return shotProject + " › " + shotPage
-  }
-
-  readonly property string subjectLine: {
-    if (root.view !== "shot") return ""
-    if (root.pageHold && !root.shotHere) return ""
-    return root.boardName(root.nodeId)
-  }
-
-  readonly property string headerText: root.subjectLine === ""
-    ? root.contextLine
-    : root.contextLine + " › " + root.subjectLine
 
   function open(payloadJson) {
     if (docked) undock()
@@ -184,7 +294,7 @@ Item {
     if (!next) return
     if (body.parent !== next) body.parent = next
     body.anchors.fill = next
-    body.anchors.margins = Style.spacing.popupPadding
+    body.anchors.margins = 0
   }
 
   function dock(payloadJson) {
@@ -201,8 +311,7 @@ Item {
     startCommand(["resolve"], "resolve")
     Qt.callLater(function() {
       if (!docked) return
-      if (view === "shot") flick.forceActiveFocus()
-      else browserFlick.forceActiveFocus()
+      content.forceActiveFocus()
     })
   }
 
@@ -388,14 +497,24 @@ Item {
   }
 
   function parseCurrent(text) {
-    var empty = { fileId: "", pageId: "", nodeId: "" }
+    var empty = {
+      fileId: "",
+      pageId: "",
+      nodeId: "",
+      projectName: "",
+      pageName: "",
+      artboardName: ""
+    }
     if (!text) return empty
     try {
       var parsed = JSON.parse(text)
       return {
         fileId: safeId(parsed.fileId),
         pageId: safeId(parsed.pageId),
-        nodeId: safeId(parsed.nodeId)
+        nodeId: safeId(parsed.nodeId),
+        projectName: typeof parsed.projectName === "string" ? parsed.projectName : "",
+        pageName: typeof parsed.pageName === "string" ? parsed.pageName : "",
+        artboardName: typeof parsed.artboardName === "string" ? parsed.artboardName : ""
       }
     } catch (e) {
       return empty
@@ -424,6 +543,9 @@ Item {
     fileId = current.fileId
     pageId = current.pageId
     nodeId = current.nodeId
+    projectName = current.projectName
+    pageName = current.pageName
+    artboardName = current.artboardName
     imagePath = fileId !== "" && nodeId !== ""
       ? cacheDir + "/shots/" + fileId + "/" + nodeId + ".jpg"
       : ""
@@ -440,8 +562,8 @@ Item {
     if (target.kind === "projects") {
       pageHold = null
       view = "projects"
-      rows = []
-      cursor = 0
+      browserSlots = []
+      cursor = Layout.placeCursor([])
       startCommand(["browser", "projects"], "rows")
       return
     }
@@ -450,8 +572,8 @@ Item {
       browseFileId = target.fileId || ""
       browseProjectName = target.projectName || ""
       view = "pages"
-      rows = []
-      cursor = 0
+      browserSlots = []
+      cursor = Layout.placeCursor([])
       startCommand(["browser", "pages", target.fileId], "rows")
       return
     }
@@ -474,8 +596,8 @@ Item {
         return
       }
       view = "projects"
-      rows = []
-      cursor = 0
+      browserSlots = []
+      cursor = Layout.placeCursor([])
       startCommand(["browser", "projects"], "rows")
     }
   }
@@ -504,26 +626,11 @@ Item {
     }
   }
 
-  function boardName(nodeId) {
-    if (nodeId === "") return ""
-    for (var i = 0; i < boards.length; i++) {
-      if (boards[i] && boards[i].id === nodeId) return boards[i].name
-    }
-    return ""
+  function applyRows(parsed) {
+    var rows = parsed && Array.isArray(parsed.rows) ? parsed.rows : []
+    browserSlots = Layout.slotsFromBrowserJson(rows)
+    cursor = Layout.placeCursor(browserSlots)
   }
-
-  function stageHeight(viewport, pairHeight) {
-    if (pairHeight > viewport) return pairHeight
-    return viewport
-  }
-
-  function pairY(stageH, pairHeight) {
-    if (pairHeight >= stageH) return 0
-    return Math.round((stageH - pairHeight) / 2)
-  }
-
-  onListedFileIdChanged: boards = []
-  onListedPageIdChanged: boards = []
 
   function startCommand(args, name) {
     if (commandFetch.running) {
@@ -584,12 +691,6 @@ Item {
     root.refreshShot()
   }
 
-  function applyRows(parsed) {
-    root.rows = parsed && Array.isArray(parsed.rows) ? parsed.rows : []
-    root.cursor = root.firstRow()
-    browserFlick.contentY = 0
-  }
-
   function applyRemember() {
     root.notice = ""
     root.show({ kind: "current" })
@@ -636,82 +737,6 @@ Item {
       return
     }
     root.closeBrowser()
-  }
-
-  function firstRow() {
-    for (var i = 0; i < root.rows.length; i++) {
-      if (root.rows[i] && root.rows[i].kind !== "header") return i
-    }
-    return 0
-  }
-
-  function moveCursor(delta) {
-    if (root.rows.length === 0) return
-    var index = root.cursor
-    for (var step = 0; step < root.rows.length; step++) {
-      index = (index + delta + root.rows.length) % root.rows.length
-      var row = root.rows[index]
-      if (row && row.kind !== "header") {
-        root.cursor = index
-        root.revealCursor()
-        return
-      }
-    }
-  }
-
-  function revealCursor() {
-    var y = root.cursor * root.rowHeight
-    if (y < browserFlick.contentY) browserFlick.contentY = y
-    else if (y + root.rowHeight > browserFlick.contentY + browserFlick.height)
-      browserFlick.contentY = Math.max(0, y + root.rowHeight - browserFlick.height)
-  }
-
-  function activateRow(index) {
-    var row = root.rows[index]
-    if (!row || row.kind === "header") return
-    root.cursor = index
-    if (row.kind === "project") {
-      root.notice = ""
-      root.show({
-        kind: "pages",
-        fileId: row.fileId,
-        projectName: row.label || ""
-      })
-      return
-    }
-    if (row.kind === "page") {
-      root.show({
-        kind: "page",
-        fileId: row.fileId,
-        pageId: row.pageId,
-        projectName: root.browseProjectName,
-        pageName: row.label || ""
-      })
-      return
-    }
-    if (row.kind === "recent")
-      root.rememberPlace(row.fileId, row.pageId, row.nodeId)
-  }
-
-  function rowLabel(row) {
-    if (!row) return ""
-    if (row.kind === "recent" && row.detail) return row.label + " · " + row.detail
-    return row.label || ""
-  }
-
-  function browserKey(event) {
-    if (event.key === Qt.Key_F) {
-      root.enterFloat()
-      event.accepted = true
-      return
-    }
-    if (event.key === Qt.Key_Up) root.moveCursor(-1)
-    else if (event.key === Qt.Key_Down) root.moveCursor(1)
-    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.activateRow(root.cursor)
-    else if (event.key === Qt.Key_Backspace) root.back()
-    else if (event.key === Qt.Key_Escape) root.closeBrowser()
-    else return
-    event.accepted = true
   }
 
   function reloadSettings() {
@@ -767,6 +792,337 @@ Item {
     }
     var warnings = parsed && parsed.warnings ? parsed.warnings : []
     for (var i = 0; i < warnings.length; i++) console.warn("paper-peek: " + warnings[i])
+  }
+
+  component CaptionProbe: PanelSectionHeader {
+    text: "Recent"
+    visible: false
+    foreground: root.ink
+    fontFamily: Style.menuFontFamily
+    fontSize: Style.font.caption
+  }
+
+  component HeaderStrip: Item {
+    id: headerStrip
+    implicitHeight: Math.max(titleCol.implicitHeight, actionRow.implicitHeight) + root.chrome.columnGap * 2 + root.chrome.rule
+    height: implicitHeight
+    readonly property var cols: Layout.columns(width, root.chrome, actionRow.implicitWidth)
+
+    Column {
+      id: titleCol
+      x: headerStrip.cols.textX
+      y: root.chrome.columnGap
+      width: headerStrip.cols.titleWidth
+      spacing: 0
+
+      Text {
+        width: parent.width
+        text: root.headerCopy.title
+        textFormat: Text.PlainText
+        wrapMode: Text.Wrap
+        elide: Text.ElideNone
+        color: root.ink
+        font.family: Style.menuFontFamily
+        font.pixelSize: Style.font.title
+        font.bold: true
+      }
+
+      Text {
+        width: parent.width
+        visible: root.headerCopy.trail !== ""
+        text: root.headerCopy.trail
+        textFormat: Text.PlainText
+        maximumLineCount: 1
+        wrapMode: Text.NoWrap
+        elide: Text.ElideRight
+        color: root.inkSecondary
+        font.family: Style.menuFontFamily
+        font.pixelSize: Style.font.caption
+      }
+    }
+
+    Row {
+      id: actionRow
+      height: implicitHeight
+      anchors.right: parent.right
+      anchors.rightMargin: root.chrome.gutter
+      anchors.verticalCenter: titleCol.verticalCenter
+      spacing: root.chrome.columnGap
+
+      Repeater {
+        model: Layout.headerActions(root.view, root.pageHold !== null)
+
+        PanelActionButton {
+          required property var modelData
+          iconText: modelData.icon
+          tooltipText: modelData.tooltip
+          foreground: root.ink
+          fontFamily: Style.menuFontFamily
+          focusable: false
+          onClicked: root.runAction(modelData.id)
+        }
+      }
+    }
+
+    PanelSeparator {
+      anchors.bottom: parent.bottom
+      width: parent.width
+      foreground: root.ink
+    }
+  }
+
+  component StatusLine: Item {
+    id: statusLine
+    height: root.chrome.footerHeight
+    readonly property var cols: Layout.columns(width, root.chrome, 0)
+
+    Rectangle {
+      x: statusLine.cols.textX
+      width: root.chrome.dot
+      height: root.chrome.dot
+      radius: height / 2
+      anchors.verticalCenter: parent.verticalCenter
+      color: root.dotColor(root.peekStatus)
+    }
+
+    Text {
+      x: statusLine.cols.textX + root.chrome.dot + root.chrome.columnGap
+      width: Math.max(0, parent.width - x - root.chrome.gutter)
+      text: Layout.statusWord(root.peekStatus)
+      textFormat: Text.PlainText
+      elide: Text.ElideRight
+      maximumLineCount: 1
+      anchors.verticalCenter: parent.verticalCenter
+      color: root.ink
+      font.family: Style.menuFontFamily
+      font.pixelSize: Style.font.body
+    }
+  }
+
+  component ShotStage: Item {
+    clip: true
+    visible: root.frame.shot !== null
+    y: 0
+    width: parent.width
+    height: root.frame.shot ? root.frame.shot.height : 0
+
+    Image {
+      id: shot
+      property string measuredSource: ""
+      x: root.frame.shot ? root.frame.shot.image.x : 0
+      y: root.frame.shot ? root.frame.shot.image.y : 0
+      width: root.frame.shot ? root.frame.shot.image.width : 0
+      height: root.frame.shot ? root.frame.shot.image.height : 0
+      asynchronous: true
+      cache: false
+      fillMode: Image.PreserveAspectFit
+      source: root.shotSource
+      sourceSize.width: width > 0
+        ? Math.max(1, Math.round(width * ((root.docked ? dockWindow.devicePixelRatio : window.devicePixelRatio) || 1)))
+        : 0
+      onStatusChanged: {
+        if (status !== Image.Ready) return
+        var key = String(source)
+        if (key === "" || key === measuredSource) return
+        if (implicitWidth <= 0 || implicitHeight <= 0) return
+        root.shotNaturalW = implicitWidth
+        root.shotNaturalH = implicitHeight
+        measuredSource = key
+      }
+    }
+
+    Text {
+      anchors.centerIn: parent
+      visible: root.frame.shot !== null
+        && root.shotHere
+        && (root.imagePath === "" || shot.status === Image.Error || shot.status === Image.Null)
+      text: "No cached artboard"
+      textFormat: Text.PlainText
+      color: root.ink
+      font.family: Style.menuFontFamily
+      font.pixelSize: Style.font.body
+    }
+  }
+
+  component RegionList: ListView {
+    y: root.frame.list.y
+    width: parent.width
+    height: root.frame.list.height
+    clip: true
+    model: root.activeSlots
+    spacing: 0
+    boundsBehavior: Flickable.StopAtBounds
+    interactive: contentHeight > height
+    keyNavigationEnabled: false
+    highlightFollowsCurrentItem: false
+    focus: false
+    currentIndex: root.view === "shot" ? -1 : root.cursor
+    delegate: SlotDelegate {}
+  }
+
+  component SlotDelegate: Item {
+    id: rowItem
+    required property var modelData
+    required property int index
+    property var slot: modelData
+    property var face: Layout.classify(slot)
+    property var cols: Layout.columns(ListView.view.width, root.chrome, 0)
+    property var flags: Layout.rowSurface(root.view, slot, index, root.cursor, root.nodeId, root.shotHere)
+    width: ListView.view.width
+    height: Layout.slotHeight(slot, root.chrome)
+
+    CursorSurface {
+      anchors.fill: parent
+      radius: 0
+      visible: rowItem.face.selectable
+      hasCursor: rowItem.flags.hasCursor
+      current: rowItem.flags.current
+      foreground: root.ink
+      fill: Commons.Color.menu.selectedBackground
+      currentFill: Commons.Color.menu.selectedBackground
+    }
+
+    PanelSectionHeader {
+      x: rowItem.cols.textX
+      width: rowItem.cols.textWidth
+      height: parent.height
+      visible: rowItem.face.presentation === "caption"
+      text: rowItem.slot.label
+      elide: Text.ElideRight
+      foreground: root.ink
+      fontFamily: Style.menuFontFamily
+      fontSize: Style.font.caption
+    }
+
+    Text {
+      x: rowItem.cols.recentLeft.x
+      width: rowItem.cols.recentLeft.width
+      height: parent.height
+      visible: rowItem.face.presentation === "recent"
+      verticalAlignment: Text.AlignVCenter
+      text: rowItem.slot.label
+      textFormat: Text.PlainText
+      elide: Text.ElideRight
+      color: (rowItem.flags.hasCursor || rowItem.flags.current) ? Commons.Color.menu.selectedText : root.ink
+      font.family: Style.menuFontFamily
+      font.pixelSize: Style.font.body
+    }
+
+    Text {
+      x: rowItem.cols.recentRight.x
+      width: rowItem.cols.recentRight.width
+      height: parent.height
+      visible: rowItem.face.presentation === "recent"
+      verticalAlignment: Text.AlignVCenter
+      text: rowItem.slot.detail
+      textFormat: Text.PlainText
+      elide: Text.ElideRight
+      color: root.inkSecondary
+      font.family: Style.menuFontFamily
+      font.pixelSize: Style.font.body
+    }
+
+    Text {
+      x: rowItem.cols.textX
+      width: rowItem.cols.textWidth
+      height: parent.height
+      visible: rowItem.face.presentation === "single"
+      verticalAlignment: Text.AlignVCenter
+      text: rowItem.slot.label
+      textFormat: Text.PlainText
+      elide: Text.ElideRight
+      color: (rowItem.flags.hasCursor || rowItem.flags.current) ? Commons.Color.menu.selectedText : root.ink
+      font.family: Style.menuFontFamily
+      font.pixelSize: Style.font.body
+    }
+
+    MouseArea {
+      anchors.fill: parent
+      enabled: rowItem.face.selectable
+      hoverEnabled: root.view !== "shot"
+      onContainsMouseChanged: {
+        if (containsMouse && root.view !== "shot") root.cursor = rowItem.index
+      }
+      onClicked: root.activateSlot(rowItem.index)
+    }
+  }
+
+  component FloatStrip: Item {
+    id: floatStripItem
+    height: root.chrome.controlHeight
+    clip: true
+    readonly property var cols: Layout.columns(
+      width,
+      root.chrome,
+      root.chrome.dot + root.chrome.columnGap + passButton.width)
+
+    Rectangle {
+      anchors.fill: parent
+      color: Commons.Color.menu.background
+    }
+
+    PanelSeparator {
+      anchors.bottom: parent.bottom
+      width: parent.width
+      foreground: root.ink
+    }
+
+    Text {
+      x: floatStripItem.cols.textX
+      width: floatStripItem.cols.titleWidth
+      anchors.verticalCenter: parent.verticalCenter
+      text: root.floatName
+      textFormat: Text.PlainText
+      elide: Text.ElideNone
+      wrapMode: Text.NoWrap
+      maximumLineCount: 1
+      color: root.ink
+      font.family: Style.menuFontFamily
+      font.pixelSize: Style.font.title
+      font.bold: true
+    }
+
+    Rectangle {
+      anchors.right: passButton.left
+      anchors.rightMargin: root.chrome.columnGap
+      anchors.verticalCenter: parent.verticalCenter
+      width: root.chrome.dot
+      height: root.chrome.dot
+      radius: height / 2
+      color: root.dotColor(root.peekStatus)
+    }
+
+    Rectangle {
+      id: passButton
+      anchors.right: parent.right
+      anchors.rightMargin: root.chrome.gutter
+      anchors.verticalCenter: parent.verticalCenter
+      height: passLabel.implicitHeight + root.chrome.columnGap
+      width: passLabel.implicitWidth + root.chrome.columnGap * 2
+      radius: Style.cornerRadius
+      color: root.passClicks ? Commons.Color.urgent : "transparent"
+      border.color: Commons.Color.popups.border
+      border.width: Math.max(1, root.chrome.rule)
+
+      Text {
+        id: passLabel
+        anchors.centerIn: parent
+        text: root.passClicks ? "Passing" : "Clicks"
+        textFormat: Text.PlainText
+        color: root.ink
+        font.family: Style.menuFontFamily
+        font.pixelSize: Style.font.body
+      }
+
+      MouseArea {
+        anchors.fill: parent
+        onClicked: root.togglePassClicks()
+      }
+    }
+  }
+
+  CaptionProbe {
+    id: captionProbe
   }
 
   Process {
@@ -977,9 +1333,10 @@ Item {
     blockLoading: true
     printErrors: false
     onLoaded: {
-      var next = root.parseBoards(text())
-      if (next === null) return
-      root.boards = next
+      var parsed = root.parseBoards(text())
+      if (parsed === null) return
+      var next = Layout.slotsFromBoards(parsed, root.listedFileId, root.listedPageId)
+      if (!Layout.sameSlots(root.boardSlots, next)) root.boardSlots = next
     }
     onFileChanged: reload()
   }
@@ -1011,6 +1368,7 @@ Item {
 
     Rectangle {
       id: surface
+      clip: true
       width: root.drawerWidth
       height: window.height
       x: {
@@ -1023,7 +1381,7 @@ Item {
       radius: Style.cornerRadius
 
       Rectangle {
-        width: Math.max(1, Style.spacing.hairline)
+        width: Math.max(1, root.chrome.rule)
         height: parent.height
         x: root.drawerSide === "left" ? parent.width - width : 0
         color: Commons.Color.popups.border
@@ -1032,357 +1390,74 @@ Item {
       Item {
         id: body
         anchors.fill: parent
-        anchors.margins: Style.spacing.popupPadding
+        anchors.margins: 0
 
-        Item {
-          id: headerBar
-          width: parent.width
-          height: Math.max(
-            headerBlock.implicitHeight,
-            actionLink.implicitHeight,
-            backLink.implicitHeight,
-            floatLink.implicitHeight)
-
-          Text {
-            id: backLink
-            visible: root.view === "pages" || (root.view === "shot" && root.pageHold)
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            text: "Back"
-            textFormat: Text.PlainText
-            color: Commons.Color.popups.text
-            font.family: Style.menuFontFamily
-            font.pixelSize: Style.font.body
-
-            MouseArea {
-              anchors.fill: parent
-              onClicked: root.back()
-            }
-          }
-
-          Column {
-            id: headerBlock
-            anchors.left: backLink.visible ? backLink.right : parent.left
-            anchors.leftMargin: backLink.visible ? Style.spacing.sm : 0
-            anchors.right: floatLink.left
-            anchors.rightMargin: Style.spacing.sm
-            anchors.verticalCenter: parent.verticalCenter
-
-            Text {
-              width: headerBlock.width
-              text: root.contextLine
-              textFormat: Text.PlainText
-              color: Commons.Color.popups.text
-              font.family: Style.menuFontFamily
-              font.pixelSize: Style.font.title
-              elide: Text.ElideRight
-            }
-
-            Text {
-              width: headerBlock.width
-              height: Math.max(implicitHeight, Style.font.title)
-              visible: root.view === "shot"
-              text: root.subjectLine
-              textFormat: Text.PlainText
-              wrapMode: Text.WordWrap
-              color: Commons.Color.popups.text
-              font.family: Style.menuFontFamily
-              font.pixelSize: Style.font.title
-            }
-          }
-
-          Text {
-            id: floatLink
-            anchors.right: actionLink.left
-            anchors.rightMargin: Style.spacing.md
-            anchors.verticalCenter: parent.verticalCenter
-            text: "Float"
-            textFormat: Text.PlainText
-            color: Commons.Color.popups.text
-            font.family: Style.menuFontFamily
-            font.pixelSize: Style.font.body
-
-            MouseArea {
-              anchors.fill: parent
-              onClicked: root.enterFloat()
-            }
-          }
-
-          Text {
-            id: actionLink
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.view === "shot" ? "Browse" : "Refresh"
-            textFormat: Text.PlainText
-            color: Commons.Color.popups.text
-            font.family: Style.menuFontFamily
-            font.pixelSize: Style.font.body
-
-            MouseArea {
-              anchors.fill: parent
-              onClicked: root.view === "shot" ? root.showBrowser() : root.refreshBrowse()
-            }
-          }
+        HeaderStrip {
+          id: header
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
         }
 
         Text {
           id: noticeText
-          width: parent.width
-          anchors.top: headerBar.bottom
-          anchors.topMargin: root.notice !== "" ? Style.spacing.sm : 0
+          readonly property var cols: Layout.columns(parent.width, root.chrome, 0)
+          x: cols.textX
+          width: cols.textWidth
+          anchors.top: header.bottom
           height: root.notice === "" ? 0 : implicitHeight
-          visible: root.notice !== ""
           text: root.notice
           textFormat: Text.PlainText
-          wrapMode: Text.WordWrap
-          color: Commons.Color.popups.text
+          wrapMode: Text.Wrap
+          color: root.ink
           font.family: Style.menuFontFamily
           font.pixelSize: Style.font.body
         }
 
-        Item {
+        StatusLine {
           id: footer
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.bottom: parent.bottom
-          height: root.rowHeight
-
-          Row {
-            id: footerStatus
-            anchors.left: parent.left
-            anchors.leftMargin: Style.spacing.sm
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.spacing.sm
-
-            Rectangle {
-              width: 8
-              height: 8
-              radius: 4
-              anchors.verticalCenter: parent.verticalCenter
-              color: root.peekStatus === "live"
-                ? Commons.Color.accent
-                : (root.peekStatus === "not-live" ? Commons.Color.urgent : Commons.Color.muted)
-            }
-
-            Text {
-              anchors.verticalCenter: parent.verticalCenter
-              text: root.peekStatus === "live"
-                ? "Live"
-                : (root.peekStatus === "not-live" ? "Not live" : "Off")
-              textFormat: Text.PlainText
-              color: Commons.Color.popups.text
-              font.family: Style.menuFontFamily
-              font.pixelSize: Style.font.body
-            }
-          }
-
-          Text {
-            id: hintText
-            anchors.left: footerStatus.right
-            anchors.leftMargin: Style.spacing.sm
-            anchors.right: parent.right
-            anchors.rightMargin: Style.spacing.sm
-            anchors.verticalCenter: parent.verticalCenter
-            horizontalAlignment: Text.AlignRight
-            elide: Text.ElideLeft
-            text: root.view === "shot"
-              ? "Refresh · Return browse · F float · Esc close"
-              : "Up Down · Return open · Backspace back · Esc close"
-            textFormat: Text.PlainText
-            color: Commons.Color.muted
-            font.family: Style.menuFontFamily
-            font.pixelSize: Style.font.body
-          }
         }
 
-        Flickable {
-          id: browserFlick
-          visible: root.view !== "shot"
+        Item {
+          id: content
           anchors.top: noticeText.bottom
-          anchors.topMargin: Style.spacing.sm
+          anchors.bottom: footer.top
           anchors.left: parent.left
           anchors.right: parent.right
-          anchors.bottom: footer.top
-          clip: true
-          focus: (root.opened || root.docked) && root.view !== "shot"
-          boundsBehavior: Flickable.StopAtBounds
-          contentWidth: width
-          contentHeight: browserCol.height
-          interactive: contentHeight > height
-          Keys.onPressed: function(event) { root.browserKey(event) }
+          focus: (root.opened || root.docked) && !root.floated
+          Keys.onPressed: function(event) { root.paneKey(event) }
 
-          Column {
-            id: browserCol
-            width: browserFlick.width
+          ShotStage { id: shotStage }
 
-            Repeater {
-              model: root.rows.length
+          PanelSeparator {
+            visible: root.frame.rule > 0
+            y: root.frame.shot ? root.frame.shot.height : 0
+            width: parent.width
+            height: root.frame.rule
+            foreground: root.ink
+          }
 
-              Rectangle {
-                required property int index
-                property var row: root.rows[index]
-                width: browserCol.width
-                height: root.rowHeight
-                color: index === root.cursor && row && row.kind !== "header"
-                  ? Commons.Color.menu.selectedBackground
-                  : "transparent"
-
-                Text {
-                  anchors.fill: parent
-                  anchors.leftMargin: Style.spacing.sm
-                  anchors.rightMargin: Style.spacing.sm
-                  verticalAlignment: Text.AlignVCenter
-                  text: root.rowLabel(row)
-                  textFormat: Text.PlainText
-                  elide: Text.ElideRight
-                  color: !row || row.kind === "header"
-                    ? Commons.Color.muted
-                    : (index === root.cursor ? Commons.Color.menu.selectedText : Commons.Color.popups.text)
-                  font.family: Style.menuFontFamily
-                  font.pixelSize: Style.font.body
-                  font.bold: row && row.kind === "header"
-                }
-
-                MouseArea {
-                  anchors.fill: parent
-                  enabled: row && row.kind !== "header"
-                  onClicked: root.activateRow(index)
-                }
-              }
-            }
+          RegionList {
+            id: regionList
+            visible: !Layout.showEmpty(root.view, root.activeSlots, root.pending, root.notice)
           }
 
           Text {
-            visible: root.rows.length === 0 && root.pending === "" && root.notice === ""
+            readonly property var cols: Layout.columns(parent.width, root.chrome, 0)
+            visible: Layout.showEmpty(root.view, root.activeSlots, root.pending, root.notice)
+            anchors.verticalCenter: parent.verticalCenter
+            x: cols.textX
+            width: cols.textWidth
+            horizontalAlignment: Text.AlignHCenter
             text: "Nothing cached yet"
             textFormat: Text.PlainText
-            color: Commons.Color.muted
+            wrapMode: Text.Wrap
+            color: root.inkEmpty
             font.family: Style.menuFontFamily
             font.pixelSize: Style.font.body
-          }
-        }
-
-        Flickable {
-          id: flick
-          visible: root.view === "shot"
-          anchors.top: noticeText.bottom
-          anchors.topMargin: Style.spacing.sm
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.bottom: footer.top
-          clip: true
-          focus: (root.opened || root.docked) && root.view === "shot"
-          boundsBehavior: Flickable.StopAtBounds
-          contentWidth: width
-          contentHeight: stage.height
-          interactive: pair.height > height
-          Keys.onPressed: function(event) {
-            if (event.key === Qt.Key_Escape) {
-              if (root.docked) root.undock()
-              else root.close("")
-              event.accepted = true
-              return
-            }
-            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-              root.show({ kind: "projects" })
-              event.accepted = true
-              return
-            }
-            if (event.key === Qt.Key_F) {
-              root.enterFloat()
-              event.accepted = true
-              return
-            }
-            if (event.key === Qt.Key_Backspace && root.pageHold) {
-              root.back()
-              event.accepted = true
-              return
-            }
-            if (event.key === Qt.Key_Up) {
-              flick.contentY = Math.max(0, flick.contentY - root.rowHeight)
-              event.accepted = true
-              return
-            }
-            if (event.key === Qt.Key_Down) {
-              flick.contentY = Math.min(
-                Math.max(0, flick.contentHeight - flick.height),
-                flick.contentY + root.rowHeight)
-              event.accepted = true
-            }
-          }
-
-          Item {
-            id: stage
-            width: flick.width
-            height: root.stageHeight(flick.height, pair.height)
-
-            Column {
-              id: pair
-              width: parent.width
-              spacing: 0
-              y: root.pairY(stage.height, pair.height)
-
-              Image {
-                id: shot
-                width: flick.width
-                asynchronous: true
-                cache: false
-                fillMode: Image.PreserveAspectFit
-                horizontalAlignment: Image.AlignLeft
-                verticalAlignment: Image.AlignTop
-                source: root.shotSource
-                sourceSize.width: Math.max(1, Math.round(width * ((root.docked ? dockWindow.devicePixelRatio : window.devicePixelRatio) || 1)))
-                height: root.shotHere && implicitWidth > 0 ? width * implicitHeight / implicitWidth : 0
-              }
-
-              Text {
-                width: parent.width
-                visible: root.shotHere
-                  && (root.imagePath === "" || shot.status === Image.Error || shot.status === Image.Null)
-                height: visible ? implicitHeight : 0
-                text: "No cached artboard"
-                textFormat: Text.PlainText
-                color: Commons.Color.popups.text
-                font.family: Style.menuFontFamily
-                font.pixelSize: Style.font.body
-              }
-
-              Repeater {
-                model: root.boards
-
-                Rectangle {
-                  required property var modelData
-                  required property int index
-                  property string boardId: modelData ? modelData.id : ""
-                  property string boardLabel: modelData ? modelData.name : ""
-                  width: pair.width
-                  height: root.rowHeight
-                  color: boardId === root.nodeId && root.shotHere
-                    ? Commons.Color.menu.selectedBackground
-                    : "transparent"
-
-                  Text {
-                    anchors.fill: parent
-                    anchors.leftMargin: Style.spacing.sm
-                    anchors.rightMargin: Style.spacing.sm
-                    verticalAlignment: Text.AlignVCenter
-                    text: boardLabel
-                    textFormat: Text.PlainText
-                    elide: Text.ElideRight
-                    color: boardId === root.nodeId && root.shotHere
-                      ? Commons.Color.menu.selectedText
-                      : Commons.Color.popups.text
-                    font.family: Style.menuFontFamily
-                    font.pixelSize: Style.font.body
-                  }
-
-                  MouseArea {
-                    anchors.fill: parent
-                    onClicked: root.rememberPlace(root.listedFileId, root.listedPageId, boardId)
-                  }
-                }
-              }
-            }
           }
         }
       }
@@ -1439,7 +1514,7 @@ Item {
       anchors.fill: parent
       radius: Style.cornerRadius
       color: Commons.Color.popups.background
-      border.width: Math.max(1, Style.spacing.hairline)
+      border.width: Math.max(1, root.chrome.rule)
       border.color: Commons.Color.popups.border
       clip: true
 
@@ -1460,60 +1535,17 @@ Item {
         }
       }
 
-      Item {
-        id: floatHeader
+      FloatStrip {
+        id: floatStrip
         z: 2
-        height: 32
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-
-        Text {
-          anchors.left: parent.left
-          anchors.leftMargin: Style.spacing.sm
-          anchors.right: passButton.left
-          anchors.rightMargin: Style.spacing.sm
-          anchors.verticalCenter: parent.verticalCenter
-          text: root.headerText
-          textFormat: Text.PlainText
-          color: Commons.Color.popups.text
-          font.family: Style.menuFontFamily
-          font.pixelSize: Style.font.body
-          elide: Text.ElideRight
-        }
-
-        Rectangle {
-          id: passButton
-          anchors.right: parent.right
-          anchors.rightMargin: Style.spacing.sm
-          anchors.verticalCenter: parent.verticalCenter
-          width: passLabel.implicitWidth + Style.spacing.lg * 2
-          height: 22
-          radius: Style.cornerRadius
-          color: root.passClicks ? Commons.Color.urgent : "transparent"
-          border.width: Math.max(1, Style.spacing.hairline)
-          border.color: Commons.Color.popups.border
-
-          Text {
-            id: passLabel
-            anchors.centerIn: parent
-            text: root.passClicks ? "Passing" : "Clicks"
-            textFormat: Text.PlainText
-            color: Commons.Color.popups.text
-            font.family: Style.menuFontFamily
-            font.pixelSize: Style.font.body
-          }
-
-          MouseArea {
-            anchors.fill: parent
-            onClicked: root.togglePassClicks()
-          }
-        }
       }
 
       Image {
         id: floatShot
-        anchors.top: floatHeader.bottom
+        anchors.top: floatStrip.bottom
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
@@ -1527,23 +1559,11 @@ Item {
       }
 
       Text {
-        anchors.centerIn: parent
-        visible: root.floated && (root.imagePath === "" || floatShot.status === Image.Error || floatShot.status === Image.Null)
+        anchors.centerIn: floatShot
+        visible: root.imagePath === "" || floatShot.status === Image.Error
         text: "No cached artboard"
         textFormat: Text.PlainText
-        color: Commons.Color.popups.text
-        font.family: Style.menuFontFamily
-        font.pixelSize: Style.font.body
-      }
-
-      Text {
-        visible: root.peekStatus === "not-live"
-        text: "not live"
-        textFormat: Text.PlainText
-        anchors.left: parent.left
-        anchors.leftMargin: Style.spacing.sm
-        anchors.bottom: parent.bottom
-        color: Commons.Color.popups.text
+        color: root.ink
         font.family: Style.menuFontFamily
         font.pixelSize: Style.font.body
       }
@@ -1569,7 +1589,7 @@ Item {
           var bottom = py >= height - edge
           if (left || right || top || bottom)
             return (left ? "l" : "") + (right ? "r" : "") + (top ? "t" : "") + (bottom ? "b" : "")
-          if (py < floatHeader.height) return "move"
+          if (py < floatStrip.height) return "move"
           return ""
         }
 
