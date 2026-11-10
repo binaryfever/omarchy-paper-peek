@@ -77,3 +77,7 @@ Leave a key out to keep its default. `PAPER_MCP_URL` overrides `paperAddress` wh
   "drawerWidth": 560
 }
 ```
+
+## License
+
+MIT. See `LICENSE`.

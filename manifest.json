@@ -3,6 +3,8 @@
   "id": "fmchale.paper-peek",
   "name": "Paper Peek",
   "version": "0.0.1",
+  "author": "Fred McHale",
+  "description": "View your Paper designs in a drawer beside your code",
   "kinds": ["bar-widget", "overlay"],
   "keepLoaded": true,
   "entryPoints": {
