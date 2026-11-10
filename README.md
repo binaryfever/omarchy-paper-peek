@@ -4,7 +4,7 @@ Paper Peek shows a Paper artboard beside your code.
 
 The bar widget is a dot. The tooltip reads Live, Not live, or Off. Click the dot to open the drawer. Press `SUPER + SHIFT + H` to open it, and press that hotkey again to close it.
 
-The drawer slides in from the right. The header is two lines: the project and page, then the artboard name. Under the shot, the same column lists that page's artboards, and a click loads that artboard. A click on the artboard itself opens it at the size of the screen, and a click anywhere brings the drawer back. Browse opens the project list.
+The drawer slides in from the right. The header is two lines: the artboard name, then the project and page it comes from. Under the shot, the same column lists that page's artboards, and a click loads that artboard. A click on the artboard itself opens it at the size of the screen, and a click anywhere brings the drawer back. The expand control in the artboard's top right corner does the same. Browse opens the project list.
 
 ![Drawer open on the current artboard](docs/drawer.png)
 

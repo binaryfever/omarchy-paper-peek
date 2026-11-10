@@ -100,6 +100,7 @@ Item {
       controlHeight: Style.spacing.controlHeight,
       hairline: Style.spacing.hairline,
       captionHeight: captionProbe.implicitHeight,
+      badgeSize: badgeProbe.implicitHeight,
       popupRowHeight: Style.spacing.popupRowHeight
     }
   }
@@ -694,7 +695,7 @@ Item {
       spacing: root.chrome.columnGap
 
       Repeater {
-        model: Layout.headerActions(root.view, root.pageHold !== null, root.canZoom)
+        model: Layout.headerActions(root.view, root.pageHold !== null)
 
         PanelActionButton {
           required property var modelData
@@ -800,6 +801,40 @@ Item {
       acceptedButtons: Qt.LeftButton
       cursorShape: root.canZoom ? Qt.PointingHandCursor : Qt.ArrowCursor
       onClicked: root.enterZoom()
+    }
+
+    // The sign of that click, on the artboard rather than in the drawer's top
+    // bar. Declared after the pane's own MouseArea so it takes the click it
+    // advertises.
+    Rectangle {
+      id: expandChip
+      readonly property var badge: root.frame.shot ? root.frame.shot.badge : null
+      visible: badge !== null && root.canZoom && shot.status === Image.Ready
+      x: badge ? badge.x : 0
+      y: badge ? badge.y : 0
+      width: badge ? badge.size : 0
+      height: width
+      radius: Style.cornerRadius
+      // The theme's popup background carries its own alpha, for the blur
+      // behind a panel. Over an artboard that reads as a smudge of the design
+      // underneath, and a pale artboard would swallow the glyph, so the chip
+      // takes the theme's color at full alpha. The button draws its own
+      // border over it: quiet at rest, the accent under the pointer, which is
+      // what every other bordered control in the shell does.
+      readonly property color base: Commons.Color.popups.background
+      color: Qt.rgba(base.r, base.g, base.b, 1)
+
+      PanelActionButton {
+        anchors.centerIn: parent
+        size: expandChip.width
+        bordered: true
+        iconText: Layout.actionIcon("zoom")
+        tooltipText: "Expand"
+        foreground: root.ink
+        fontFamily: Style.menuFontFamily
+        focusable: false
+        onClicked: root.enterZoom()
+      }
     }
   }
 
@@ -930,6 +965,14 @@ Item {
 
   CaptionProbe {
     id: captionProbe
+  }
+
+  // Never shown. The chip on the artboard takes the theme's size for a panel
+  // action, and this is what that size is measured from.
+  PanelActionButton {
+    id: badgeProbe
+    visible: false
+    fontFamily: Style.menuFontFamily
   }
 
   Process {

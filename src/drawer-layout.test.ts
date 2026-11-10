@@ -58,7 +58,12 @@ type LayoutApi = {
     imageHeight: number,
     chromeRef: Record<string, number>,
   ) => {
-    shot: { scroll: string; height: number; image: { x: number; y: number; width: number; height: number } } | null
+    shot: {
+      scroll: string
+      height: number
+      image: { x: number; y: number; width: number; height: number }
+      badge: { x: number; y: number; size: number } | null
+    } | null
     rule: number
     list: { id: string; scroll: string; y: number; height: number }
   }
@@ -71,7 +76,8 @@ type LayoutApi = {
     imageH: number,
     chromeRef: Record<string, number>,
   ) => { x: number; y: number; width: number; height: number }
-  headerActions: (view: string, holding: boolean, canZoom: boolean) => Array<{ id: string }>
+  headerActions: (view: string, holding: boolean) => Array<{ id: string }>
+  actionIcon: (id: string) => string
   statusDot: (status: string) => string
   statusWord: (status: string) => string
   showEmpty: (view: string, slots: unknown, pending: string, notice: string) => boolean
@@ -87,6 +93,7 @@ const defaultTokens = {
   controlHeight: 28,
   hairline: 1,
   captionHeight: 16,
+  badgeSize: 23,
   popupRowHeight: 28,
 }
 
@@ -100,6 +107,11 @@ assert(defaultChrome.boardRows === 4, "default board rows")
 assert(defaultChrome.floorRows === 1, "default floor rows")
 assert(defaultChrome.secondaryDarken === 1.4, "default secondary darken")
 assert(defaultChrome.emptyDarken === 1.5, "default empty darken")
+assert(defaultChrome.badge === defaultTokens.badgeSize, "the chip takes the measured control size")
+assert(
+  defaultChrome.badgeInset * 2 === defaultChrome.gutter,
+  "the chip sits half the artboard's margin off its corner",
+)
 
 const largeTokens = {
   rowPaddingX: 16,
@@ -109,6 +121,7 @@ const largeTokens = {
   controlHeight: 37,
   hairline: 1,
   captionHeight: 20,
+  badgeSize: 29,
   popupRowHeight: 38,
 }
 const largeChrome = Layout.chrome(largeTokens)
@@ -116,6 +129,10 @@ assert(largeChrome.gutter === 16, "large gutter")
 assert(largeChrome.rowHeight === 38, "large row height from popupRowHeight")
 assert(Layout.columns(480, largeChrome, 0).textX === 16, "large text origin")
 assert(Layout.columns(480, largeChrome, 120).titleWidth > 220, "large title width fits long artboard name")
+assert(
+  largeChrome.badgeInset > defaultChrome.badgeInset,
+  "a theme that widens the gutter widens the chip's inset with it",
+)
 
 const tokenOverride = {
   rowPaddingX: 12,
@@ -125,6 +142,7 @@ const tokenOverride = {
   controlHeight: 28,
   hairline: 1,
   captionHeight: 16,
+  badgeSize: 23,
   popupRowHeight: 31,
 }
 const overrideChrome = Layout.chrome(tokenOverride)
@@ -317,6 +335,50 @@ assert(
     unknownShot.shot.height === Math.round(480 * defaultChrome.shotAspect) + defaultChrome.gutter * 2,
   "an unmeasured artboard holds the cap",
 )
+// The control that opens the big view rides the artboard, so it follows the
+// image's corner whatever shape the artboard is, not the pane's.
+for (const [name, frame] of [
+  ["a portrait artboard", tallFrame],
+  ["a landscape artboard", wideShot],
+] as const) {
+  const shot = frame.shot
+  assert(shot !== null && shot.badge !== null, name + " carries the expand chip")
+  if (!shot || !shot.badge) continue
+  const badge = shot.badge
+  assert(
+    badge.x + badge.size === shot.image.x + shot.image.width - defaultChrome.badgeInset,
+    name + " puts the chip on the image's right edge",
+  )
+  assert(
+    badge.y === shot.image.y + defaultChrome.badgeInset,
+    name + " puts the chip on the image's top edge",
+  )
+  assert(
+    badge.x >= shot.image.x &&
+      badge.y + badge.size <= shot.image.y + shot.image.height,
+    name + " keeps the chip on the artboard",
+  )
+}
+assert(
+  tallFrame.shot !== null &&
+    tallFrame.shot.badge !== null &&
+    tallFrame.shot.badge.x + tallFrame.shot.badge.size < 480 - defaultChrome.gutter,
+  "a portrait artboard's chip follows the artboard inward, off the drawer's edge",
+)
+
+// An artboard too thin to give the chip a corner goes without one: it would
+// land in the middle of the design. A click on the pane still opens it.
+const sliverShot = Layout.contentFrame("shot", 480, 1350, 4000, 200, defaultChrome)
+assert(
+  sliverShot.shot !== null && sliverShot.shot.badge === null,
+  "a sliver of an artboard carries no chip",
+)
+assert(squatShot.shot !== null && squatShot.shot.badge !== null, "a squat artboard still carries one")
+assert(
+  unknownShot.shot !== null && unknownShot.shot.badge === null,
+  "an unmeasured artboard carries no chip until it reports a shape",
+)
+
 assert(
   tallerFrame.shot !== null &&
     tallerFrame.shot.image.height === tallerFrame.shot.height - defaultChrome.gutter * 2,
@@ -454,30 +516,29 @@ const pageHold = Layout.drawerHeader({
 })
 assert(pageHold.title === "Home" && pageHold.title !== "Old name", "page hold shows page name not prior artboard")
 
-const shotActions = Layout.headerActions("shot", true, false)
+const shotActions = Layout.headerActions("shot", true)
 assert(
   shotActions.map((a) => a.id).join(",") === "back,browse",
-  "shot with hold and no cached artboard gets back and browse",
+  "a held shot gets back and browse",
 )
 assert(
-  Layout.headerActions("shot", true, true).map((a) => a.id).join(",") === "back,zoom,browse",
-  "a cached shot gets a zoom action",
+  Layout.headerActions("shot", false).map((a) => a.id).join(",") === "browse",
+  "an unheld shot gets browse alone",
 )
 assert(
-  Layout.headerActions("shot", false, true).map((a) => a.id).join(",") === "zoom,browse",
-  "zoom needs no hold",
+  Layout.headerActions("projects", false).map((a) => a.id).join(",") === "refresh",
+  "projects actions",
 )
-assert(
-  Layout.headerActions("projects", false, true).map((a) => a.id).join(",") === "refresh",
-  "projects actions take no zoom",
-)
-assert(Layout.headerActions("pages", false, true).map((a) => a.id).join(",") === "back,refresh", "pages actions")
+assert(Layout.headerActions("pages", false).map((a) => a.id).join(",") === "back,refresh", "pages actions")
 const everyAction = ["shot", "pages", "projects"].flatMap((view) =>
-  [true, false].flatMap((hold) =>
-    [true, false].flatMap((zoom) => Layout.headerActions(view, hold, zoom).map((a) => a.id)),
-  ),
+  [true, false].flatMap((hold) => Layout.headerActions(view, hold).map((a) => a.id)),
 )
 assert(!everyAction.includes("float"), "no view offers a float action")
+// The header's actions move the drawer: where it goes and what it holds. The
+// control that acts on the artboard belongs on the artboard.
+assert(!everyAction.includes("zoom"), "no view offers a zoom action in the header")
+assert(Layout.actionIcon("zoom") !== "", "the zoom glyph is still reachable by id")
+assert(Layout.actionIcon("nope") === "", "an unknown action id has no glyph")
 
 assert(Layout.statusDot("live") === "accent", "live dot")
 assert(Layout.statusDot("not-live") === "urgent", "not-live dot")
@@ -532,11 +593,14 @@ if (anyShot.shot !== null) {
 }
 
 function functionBody(source: string, name: string): string {
-  const marker = `function ${name}(`
+  return blockBody(source, `function ${name}(`)
+}
+
+function blockBody(source: string, marker: string): string {
   const start = source.indexOf(marker)
-  assert(start >= 0, name + " exists")
+  assert(start >= 0, marker + " exists")
   const open = source.indexOf("{", start)
-  assert(open >= 0, name + " opens")
+  assert(open >= 0, marker + " opens")
   let depth = 0
   for (let i = open; i < source.length; i++) {
     if (source[i] === "{") depth += 1
@@ -545,7 +609,7 @@ function functionBody(source: string, name: string): string {
       if (depth === 0) return source.slice(start, i + 1)
     }
   }
-  assert(false, name + " closes")
+  assert(false, marker + " closes")
   return ""
 }
 
@@ -585,6 +649,27 @@ const banned = [
 for (const word of banned) {
   assert(!drawerSource.includes(word), "Drawer does not contain " + word)
 }
+
+const stageBody = blockBody(drawerSource, "component ShotStage")
+const headerBody = blockBody(drawerSource, "component HeaderStrip")
+assert(stageBody.includes("id: expandChip"), "the expand chip lives in the shot pane")
+assert(!headerBody.includes("expandChip"), "the expand chip is not in the header")
+assert(
+  headerBody.includes("Layout.headerActions(root.view, root.pageHold !== null)"),
+  "the header asks only for the actions that act on the drawer",
+)
+assert(
+  stageBody.includes("root.frame.shot.badge"),
+  "the chip takes its corner from the layout, not from its own arithmetic",
+)
+assert(
+  stageBody.indexOf("MouseArea") < stageBody.indexOf("id: expandChip"),
+  "the chip is declared after the pane's click target, so it takes the click it advertises",
+)
+assert(
+  countNeedle(drawerSource, 'Layout.actionIcon("zoom")') === 1,
+  "the chip's glyph comes from the layout module",
+)
 
 const tokensBody = functionBody(drawerSource, "styleTokens")
 assert(
