@@ -23,6 +23,8 @@ Item {
   property string drawerSide: "right"
   property int drawerWidth: 480
   property int refreshIntervalMs: 2000
+  // A closed drawer checks at a fifteenth of the rate. See statusTimer.
+  readonly property int idleStatusFactor: 15
   property string defaultMode: "drawer"
   property string paperUrl: ""
   property bool openIntoBrowser: false
@@ -84,6 +86,12 @@ Item {
     shotHere ? shotNaturalH : 0,
     chrome)
   readonly property var headerCopy: Layout.drawerHeader(headerInput())
+
+  // Changing the interval restarts the countdown, so without this the dot
+  // would hold whatever the idle rate last saw for a further two seconds, in
+  // front of the one person who is looking at it.
+  onOpenedChanged: if (root.opened) root.probeStatus()
+  onDockedChanged: if (root.docked) root.probeStatus()
 
   onListedFileIdChanged: boardSlots = []
   onListedPageIdChanged: boardSlots = []
@@ -1032,9 +1040,15 @@ Item {
     }
   }
 
+  // Each check costs a process start and a request to Paper. While the drawer
+  // is closed the bar's dot is the only reader of that answer, and nobody is
+  // watching a dot the way they watch an artboard, so the check backs off to a
+  // fifteenth of the rate. An open drawer puts it back on its own interval.
   Timer {
     id: statusTimer
-    interval: root.refreshIntervalMs
+    interval: (root.opened || root.docked)
+      ? root.refreshIntervalMs
+      : root.refreshIntervalMs * root.idleStatusFactor
     repeat: true
     running: true
     triggeredOnStart: true

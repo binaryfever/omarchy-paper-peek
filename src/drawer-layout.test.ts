@@ -671,6 +671,27 @@ assert(
   "the chip's glyph comes from the layout module",
 )
 
+// The status check costs a process start, so a closed drawer must not pay the
+// open drawer's rate for a dot nobody is watching.
+const statusTimerAt = drawerSource.indexOf("id: statusTimer")
+assert(statusTimerAt >= 0, "the drawer has a status timer")
+const statusTimerBody = drawerSource.slice(
+  statusTimerAt,
+  drawerSource.indexOf("\n  }", statusTimerAt),
+)
+assert(
+  statusTimerBody.includes("root.refreshIntervalMs * root.idleStatusFactor"),
+  "the status check backs off while the drawer is closed",
+)
+assert(
+  statusTimerBody.includes("root.opened || root.docked"),
+  "the open drawer gets the full rate",
+)
+assert(
+  drawerSource.includes("onOpenedChanged: if (root.opened) root.probeStatus()"),
+  "opening the drawer checks at once rather than waiting out the idle interval",
+)
+
 const tokensBody = functionBody(drawerSource, "styleTokens")
 assert(
   tokensBody.includes("popupRowHeight: Style.spacing.popupRowHeight"),

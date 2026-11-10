@@ -64,7 +64,7 @@ Change Paper Peek in `~/.config/paper-peek/settings.json`. With no file, Paper P
 | `browserHotkey` | empty | Hotkey that opens the project browser. Empty adds no hotkey |
 | `drawerSide` | `right` | `left` or `right` |
 | `drawerWidth` | `480` | Drawer width in pixels, from 240 to 1200 |
-| `refreshIntervalMs` | `2000` | Milliseconds between Paper checks, from 500 to 60000 |
+| `refreshIntervalMs` | `2000` | Milliseconds between Paper checks while the drawer is open, from 500 to 60000. A closed drawer checks at a fifteenth of that rate, because the bar's dot is the only thing reading it. Opening the drawer checks at once |
 | `defaultMode` | `drawer` | `drawer` or `dock` on the next open |
 | `paperAddress` | `127.0.0.1:29979` | Paper host and port. Requests use that host and port on the path `/mcp` |
 | `cacheBudgetMb` | `200` | Cap on `shots/`, in megabytes, from 0 to 1048576. 0 keeps the current artboard and the five recents |
