@@ -1,4 +1,0 @@
-#!/bin/sh
-set -eu
-root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd) || exit 3
-exec node --experimental-strip-types "$root/src/float-geometry.ts" "$@"

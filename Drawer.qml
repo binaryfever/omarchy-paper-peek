@@ -41,6 +41,9 @@ Item {
   property int cursor: -1
   property real shotNaturalW: 0
   property real shotNaturalH: 0
+  property bool zoomed: false
+  property real zoomNaturalW: 0
+  property real zoomNaturalH: 0
   property string imagePath: ""
   property int shotRevision: 0
   property string peekStatus: "off"
@@ -57,20 +60,7 @@ Item {
     root.fileId !== "" && root.pageId !== "" && root.nodeId !== ""
     && root.fileId === root.listedFileId && root.pageId === root.listedPageId
 
-  readonly property string floatPath: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/paper-peek/float.json"
-  readonly property string geomScript: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omarchy/plugins/fmchale.paper-peek/scripts/float-geometry"
-  readonly property int floatInset: 16
-  readonly property int floatMinW: 180
-  readonly property int floatMinH: 140
-  property bool floated: false
   property bool docked: false
-  property bool passClicks: false
-  property bool floatKnown: false
-  property bool floatDragging: false
-  property int floatX: 16
-  property int floatY: 16
-  property int floatW: 420
-  property int floatH: 320
 
   readonly property string shotSource: imagePath === "" ? "" : (Util.fileUrl(imagePath) + (shotRevision > 0 ? ("?v=" + shotRevision) : ""))
 
@@ -79,6 +69,13 @@ Item {
   readonly property color inkSecondary: Qt.darker(ink, chrome.secondaryDarken)
   readonly property color inkEmpty: Qt.darker(ink, chrome.emptyDarken)
   readonly property var activeSlots: view === "shot" ? boardSlots : browserSlots
+  readonly property bool canZoom: view === "shot" && imagePath !== ""
+  readonly property var zoomRect: Layout.zoomFrame(
+    window.width,
+    window.height,
+    zoomNaturalW,
+    zoomNaturalH,
+    chrome)
   readonly property var frame: Layout.contentFrame(
     view,
     content.width,
@@ -87,7 +84,6 @@ Item {
     shotHere ? shotNaturalH : 0,
     chrome)
   readonly property var headerCopy: Layout.drawerHeader(headerInput())
-  readonly property string floatName: Layout.floatTitle(Layout.artboardLabel(boardSlots, nodeId), artboardName)
 
   onListedFileIdChanged: boardSlots = []
   onListedPageIdChanged: boardSlots = []
@@ -136,7 +132,7 @@ Item {
 
   function runAction(id) {
     if (id === "back") root.back()
-    else if (id === "float") root.enterFloat()
+    else if (id === "zoom") root.enterZoom()
     else if (id === "browse") root.showBrowser()
     else if (id === "refresh") root.refreshBrowse()
   }
@@ -164,6 +160,30 @@ Item {
     if (act.type === "remember") root.rememberPlace(act.fileId, act.pageId, act.nodeId)
   }
 
+  // The big view reads the JPEG already on disk, so there is no Paper call
+  // here and no state to save. Leaving it puts the drawer back as it was.
+  function enterZoom() {
+    if (!root.canZoom) return
+    if (!root.shown()) return
+    root.zoomed = true
+    Qt.callLater(function() {
+      if (!root.zoomed) return
+      zoomKeys.forceActiveFocus()
+    })
+  }
+
+  function leaveZoom() {
+    if (!root.zoomed) return
+    root.zoomed = false
+    root.zoomNaturalW = 0
+    root.zoomNaturalH = 0
+  }
+
+  function toggleZoom() {
+    if (root.zoomed) root.leaveZoom()
+    else root.enterZoom()
+  }
+
   function paneKey(event) {
     if (event.key === Qt.Key_Escape) {
       if (root.view === "shot") {
@@ -175,8 +195,8 @@ Item {
       event.accepted = true
       return
     }
-    if (event.key === Qt.Key_F) {
-      root.runAction("float")
+    if (event.key === Qt.Key_Space) {
+      root.toggleZoom()
       event.accepted = true
       return
     }
@@ -220,7 +240,6 @@ Item {
 
   function open(payloadJson) {
     if (docked) undock()
-    floated = false
     stateFile.reload()
     readCurrent()
     opened = true
@@ -230,10 +249,6 @@ Item {
   }
 
   function present() {
-    if (root.defaultMode === "float") {
-      root.enterFloat()
-      return
-    }
     if (root.defaultMode === "dock") {
       root.dock("")
       return
@@ -242,7 +257,7 @@ Item {
   }
 
   function shown() {
-    return root.opened || root.floated || root.docked
+    return root.opened || root.docked
   }
 
   function openBrowser() {
@@ -251,7 +266,6 @@ Item {
       return
     }
     root.openIntoBrowser = true
-    if (root.floated) root.floated = false
     if (root.defaultMode === "dock") root.dock("")
     else root.open("")
   }
@@ -272,15 +286,11 @@ Item {
   }
 
   function close(payloadJson) {
-    floated = false
+    leaveZoom()
     opened = false
   }
 
   function toggle() {
-    if (floated) {
-      floated = false
-      return
-    }
     if (docked) {
       undock()
       return
@@ -299,7 +309,6 @@ Item {
 
   function dock(payloadJson) {
     if (docked && dockWindow.visible) return
-    floated = false
     opened = false
     attachBody(true)
     docked = true
@@ -317,178 +326,10 @@ Item {
 
   function undock() {
     if (!docked && !dockWindow.visible) return
+    leaveZoom()
     attachBody(false)
     docked = false
     dockWindow.visible = false
-  }
-
-  function screenSize() {
-    var target = floatWindow.screen
-    if (!target && Quickshell.screens.length > 0) target = Quickshell.screens[0]
-    return {
-      width: target ? target.width : 1,
-      height: target ? target.height : 1
-    }
-  }
-
-  function parseFloatText(text) {
-    if (!text || String(text).trim() === "") return null
-    var parsed
-    try {
-      parsed = JSON.parse(text)
-    } catch (e) {
-      return null
-    }
-    if (!parsed || typeof parsed.x !== "number" || typeof parsed.y !== "number") return null
-    if (typeof parsed.width !== "number" || typeof parsed.height !== "number") return null
-    if (!isFinite(parsed.x) || !isFinite(parsed.y) || !isFinite(parsed.width) || !isFinite(parsed.height)) return null
-    if (parsed.width <= 0 || parsed.height <= 0) return null
-    if (parsed.clickThrough !== undefined && typeof parsed.clickThrough !== "boolean") return null
-    return {
-      x: parsed.x,
-      y: parsed.y,
-      width: parsed.width,
-      height: parsed.height,
-      clickThrough: parsed.clickThrough === true
-    }
-  }
-
-  function clampFloat() {
-    var box = screenSize()
-    var w = Math.round(floatW)
-    var h = Math.round(floatH)
-    if (w < floatMinW) w = floatMinW
-    if (h < floatMinH) h = floatMinH
-    if (w > box.width) w = Math.max(1, Math.round(box.width))
-    if (h > box.height) h = Math.max(1, Math.round(box.height))
-    var x = Math.round(floatX)
-    var y = Math.round(floatY)
-    if (x < 0) x = 0
-    if (y < 0) y = 0
-    if (x > box.width - w) x = Math.round(box.width - w)
-    if (y > box.height - h) y = Math.round(box.height - h)
-    floatX = x
-    floatY = y
-    floatW = w
-    floatH = h
-  }
-
-  function placeDefault() {
-    var box = screenSize()
-    var w = Math.min(420, Math.max(floatMinW, box.width - floatInset * 2))
-    var h = Math.min(320, Math.max(floatMinH, box.height - floatInset * 2))
-    floatW = w
-    floatH = h
-    floatX = Math.max(floatInset, box.width - w - floatInset)
-    floatY = Math.max(floatInset, box.height - h - floatInset)
-    passClicks = false
-    floatKnown = true
-  }
-
-  function applyFloatText(text) {
-    if (floatDragging) return
-    var parsed = parseFloatText(text)
-    if (!parsed) return
-    floatX = parsed.x
-    floatY = parsed.y
-    floatW = parsed.width
-    floatH = parsed.height
-    passClicks = parsed.clickThrough
-    floatKnown = true
-    var before = floatX + "," + floatY + "," + floatW + "," + floatH
-    clampFloat()
-    var after = floatX + "," + floatY + "," + floatW + "," + floatH
-    if (before !== after) saveFloat()
-  }
-
-  function saveFloat() {
-    var body = JSON.stringify({
-      x: floatX,
-      y: floatY,
-      width: floatW,
-      height: floatH,
-      clickThrough: passClicks
-    }, null, 2) + "\n"
-    if (floatFile.text() === body) return
-    floatFile.setText(body)
-  }
-
-  function dragFloat(x, y, w, h) {
-    floatX = x
-    floatY = y
-    floatW = w
-    floatH = h
-    clampFloat()
-  }
-
-  function resizeFloat(mode, x, y, w, h, dx, dy) {
-    var nextX = x
-    var nextY = y
-    var nextW = w
-    var nextH = h
-    if (mode.indexOf("l") >= 0) {
-      nextX = x + dx
-      nextW = w - dx
-    }
-    if (mode.indexOf("r") >= 0) nextW = w + dx
-    if (mode.indexOf("t") >= 0) {
-      nextY = y + dy
-      nextH = h - dy
-    }
-    if (mode.indexOf("b") >= 0) nextH = h + dy
-    dragFloat(nextX, nextY, nextW, nextH)
-  }
-
-  function finishFloatSize() {
-    clampFloat()
-    saveFloat()
-  }
-
-  function snapFloat() {
-    var box = screenSize()
-    snapFetch.command = [
-      geomScript, "snap",
-      String(floatX), String(floatY), String(floatW), String(floatH),
-      String(box.width), String(box.height),
-      passClicks ? "1" : "0"
-    ]
-    if (snapFetch.running) return
-    snapFetch.running = true
-  }
-
-  function applySnapText(text) {
-    var parsed = parseFloatText(text)
-    if (!parsed) {
-      clampFloat()
-      saveFloat()
-      return
-    }
-    floatX = parsed.x
-    floatY = parsed.y
-    floatW = parsed.width
-    floatH = parsed.height
-    passClicks = parsed.clickThrough
-    saveFloat()
-  }
-
-  function enterFloat() {
-    if (docked) undock()
-    if (!floatKnown) placeDefault()
-    opened = false
-    floated = true
-    show({ kind: "current" })
-    saveFloat()
-  }
-
-  function leaveFloatToDrawer() {
-    floated = false
-    open("")
-  }
-
-  function togglePassClicks() {
-    if (!floatKnown) placeDefault()
-    passClicks = !passClicks
-    saveFloat()
   }
 
   function safeId(value) {
@@ -559,6 +400,7 @@ Item {
 
   function show(target) {
     if (!target || !target.kind) return
+    leaveZoom()
     if (target.kind === "projects") {
       pageHold = null
       view = "projects"
@@ -765,7 +607,7 @@ Item {
       if (statusTimer.running) statusTimer.restart()
       if (watchTimer.running) watchTimer.restart()
     }
-    if (parsed.defaultMode === "drawer" || parsed.defaultMode === "float" || parsed.defaultMode === "dock")
+    if (parsed.defaultMode === "drawer" || parsed.defaultMode === "dock")
       root.defaultMode = parsed.defaultMode
     root.paperUrl = parsed.source === "file" && typeof parsed.paperUrl === "string" ? parsed.paperUrl : ""
     var warnings = parsed.warnings
@@ -850,7 +692,7 @@ Item {
       spacing: root.chrome.columnGap
 
       Repeater {
-        model: Layout.headerActions(root.view, root.pageHold !== null)
+        model: Layout.headerActions(root.view, root.pageHold !== null, root.canZoom)
 
         PanelActionButton {
           required property var modelData
@@ -947,6 +789,15 @@ Item {
       color: root.ink
       font.family: Style.menuFontFamily
       font.pixelSize: Style.font.body
+    }
+
+    // A click on the artboard opens it at the size of the screen. The pane's
+    // margin counts as the artboard, so a near miss still opens it.
+    MouseArea {
+      anchors.fill: parent
+      acceptedButtons: Qt.LeftButton
+      cursorShape: root.canZoom ? Qt.PointingHandCursor : Qt.ArrowCursor
+      onClicked: root.enterZoom()
     }
   }
 
@@ -1072,76 +923,6 @@ Item {
     }
   }
 
-  component FloatStrip: Item {
-    id: floatStripItem
-    height: root.chrome.controlHeight
-    clip: true
-    readonly property var cols: Layout.columns(width, root.chrome, passButton.width)
-
-    Rectangle {
-      anchors.fill: parent
-      color: Commons.Color.menu.background
-    }
-
-    PanelSeparator {
-      anchors.bottom: parent.bottom
-      width: parent.width
-      foreground: root.ink
-    }
-
-    Rectangle {
-      id: floatDot
-      x: floatStripItem.cols.textX
-      anchors.verticalCenter: parent.verticalCenter
-      width: root.chrome.dot
-      height: root.chrome.dot
-      radius: height / 2
-      color: root.dotColor(root.peekStatus)
-    }
-
-    Text {
-      x: floatDot.x + floatDot.width + root.chrome.columnGap
-      width: Math.max(0, floatStripItem.cols.titleWidth - root.chrome.dot - root.chrome.columnGap)
-      anchors.verticalCenter: parent.verticalCenter
-      text: root.floatName
-      textFormat: Text.PlainText
-      elide: Text.ElideRight
-      wrapMode: Text.NoWrap
-      maximumLineCount: 1
-      color: root.ink
-      font.family: Style.menuFontFamily
-      font.pixelSize: Style.font.body
-    }
-
-    Rectangle {
-      id: passButton
-      anchors.right: parent.right
-      anchors.rightMargin: root.chrome.gutter
-      anchors.verticalCenter: parent.verticalCenter
-      height: passLabel.implicitHeight + root.chrome.columnGap
-      width: passLabel.implicitWidth + root.chrome.columnGap * 2
-      radius: Style.cornerRadius
-      color: root.passClicks ? Commons.Color.urgent : "transparent"
-      border.color: Commons.Color.popups.border
-      border.width: Math.max(1, root.chrome.rule)
-
-      Text {
-        id: passLabel
-        anchors.centerIn: parent
-        text: root.passClicks ? "Passing" : "Clicks"
-        textFormat: Text.PlainText
-        color: root.ink
-        font.family: Style.menuFontFamily
-        font.pixelSize: Style.font.body
-      }
-
-      MouseArea {
-        anchors.fill: parent
-        onClicked: root.togglePassClicks()
-      }
-    }
-  }
-
   CaptionProbe {
     id: captionProbe
   }
@@ -1189,17 +970,9 @@ Item {
     function status(): string {
       return root.peekStatus
     }
-    function layout(): string {
-      if (root.floated) {
-        root.leaveFloatToDrawer()
-        return "drawer"
-      }
-      root.enterFloat()
-      return "float"
-    }
-    function clickthrough(): string {
-      root.togglePassClicks()
-      return root.passClicks ? "on" : "off"
+    function zoom(): string {
+      root.toggleZoom()
+      return root.zoomed ? "open" : "closed"
     }
     function dock(): string {
       root.dock("")
@@ -1371,12 +1144,26 @@ Item {
       NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
     }
 
-    visible: reveal > 0.01 && !root.floated
+    visible: reveal > 0.01 || root.zoomed
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.namespace: "fmchale-paper-peek"
-    WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+    // OnDemand while the drawer is a strip, never Exclusive. Exclusive sends
+    // every key to this surface for as long as the drawer is open, whatever
+    // window the compositor calls active, so the editor underneath goes deaf.
+    // Hyprland hands an OnDemand surface the keyboard when it maps, so Escape
+    // and Space work straight after the toggle hotkey, and it gives the
+    // keyboard up the moment another window takes focus.
+    //
+    // The big view is the one case for Exclusive. It covers the monitor, so
+    // there is nothing else to type into, and Escape has to reach it. It is
+    // painted in this same window rather than one of its own: a second
+    // surface would have to unmap to close, and the keyboard came back from
+    // that unmap belonging to no one.
+    WlrLayershell.keyboardFocus: root.zoomed
+      ? WlrKeyboardFocus.Exclusive
+      : (root.opened ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None)
 
     screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
     implicitWidth: screen ? screen.width : root.drawerWidth
@@ -1385,7 +1172,15 @@ Item {
     anchors.bottom: true
     anchors.left: true
     anchors.right: true
-    mask: Region { item: surface }
+    // The strip alone takes input, so a click past it reaches the window
+    // underneath. The big view takes the whole screen, so a click anywhere
+    // closes it.
+    mask: root.zoomed ? null : stripRegion
+
+    Region {
+      id: stripRegion
+      item: surface
+    }
 
     Rectangle {
       id: surface
@@ -1448,7 +1243,7 @@ Item {
           anchors.bottom: footer.top
           anchors.left: parent.left
           anchors.right: parent.right
-          focus: (root.opened || root.docked) && !root.floated
+          focus: (root.opened || root.docked) && !root.zoomed
           Keys.onPressed: function(event) { root.paneKey(event) }
 
           ShotStage { id: shotStage }
@@ -1483,180 +1278,76 @@ Item {
         }
       }
     }
-  }
 
-  FileView {
-    id: floatFile
-    path: root.floatPath
-    watchChanges: true
-    blockLoading: true
-    printErrors: false
-    atomicWrites: true
-    onLoaded: root.applyFloatText(text())
-    onFileChanged: reload()
-  }
-
-  Process {
-    id: snapFetch
-    running: false
-    command: [root.geomScript, "snap", "0", "0", "180", "140", "1", "1", "0"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.applySnapText(text)
-    }
-    onExited: function(exitCode) {
-      if (exitCode === 0) return
-      root.clampFloat()
-      root.saveFloat()
-    }
-  }
-
-  // A layer surface stays on every workspace. OnDemand takes a click on the
-  // card. Exclusive would take the keys the editor is using.
-  PanelWindow {
-    id: floatWindow
-    visible: root.floated
-    color: "transparent"
-    screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
-    exclusionMode: ExclusionMode.Ignore
-    WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.namespace: "fmchale-paper-peek-float"
-    WlrLayershell.keyboardFocus: root.floated && !root.passClicks ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
-    anchors.left: true
-    anchors.top: true
-    margins.left: root.floatX
-    margins.top: root.floatY
-    implicitWidth: root.floatW
-    implicitHeight: root.floatH
-    mask: Region { item: root.passClicks ? null : floatCard }
-
-    Rectangle {
-      id: floatCard
+    // The big view, over the strip and the rest of the screen. It lives in
+    // this window so that closing it hands the keyboard straight back to the
+    // drawer instead of to no one.
+    Item {
       anchors.fill: parent
-      radius: Style.cornerRadius
-      color: Commons.Color.popups.background
-      border.width: Math.max(1, root.chrome.rule)
-      border.color: Commons.Color.popups.border
-      clip: true
+      visible: root.zoomed
+      z: 1
+
+      Rectangle {
+        // The theme's popup background carries its own alpha, for the blur
+        // behind a panel. Over the desktop that reads as a window left ajar.
+        // The big view is for reading the artboard, so the backdrop takes the
+        // theme's color at full alpha and covers everything.
+        readonly property color base: Commons.Color.popups.background
+        anchors.fill: parent
+        color: Qt.rgba(base.r, base.g, base.b, 1)
+      }
+
+      MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onClicked: root.leaveZoom()
+      }
 
       Item {
+        id: zoomKeys
         anchors.fill: parent
-        focus: root.floated && !root.passClicks
+        focus: root.zoomed
         Keys.onPressed: function(event) {
-          if (event.key === Qt.Key_F) {
-            root.leaveFloatToDrawer()
-            event.accepted = true
-          } else if (event.key === Qt.Key_C) {
-            root.togglePassClicks()
-            event.accepted = true
-          } else if (event.key === Qt.Key_Escape) {
-            root.floated = false
+          if (event.key === Qt.Key_Escape
+            || event.key === Qt.Key_Space
+            || event.key === Qt.Key_Return
+            || event.key === Qt.Key_Enter
+            || event.key === Qt.Key_F) {
+            root.leaveZoom()
             event.accepted = true
           }
         }
       }
 
-      FloatStrip {
-        id: floatStrip
-        z: 2
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-      }
-
       Image {
-        id: floatShot
-        // The card's own margin, kept here rather than in anchors, so the
-        // artboard never sits on the card's border or under the strip's rule.
-        readonly property int inset:
-          floatCard.width > root.chrome.gutter * 4
-            && floatCard.height - floatStrip.height > root.chrome.gutter * 4
-            ? root.chrome.gutter
-            : 0
-        x: inset
-        y: floatStrip.height + inset
-        width: Math.max(0, floatCard.width - inset * 2)
-        height: Math.max(0, floatCard.height - floatStrip.height - inset * 2)
+        id: zoomShot
+        x: root.zoomRect.x
+        y: root.zoomRect.y
+        width: root.zoomRect.width
+        height: root.zoomRect.height
         asynchronous: true
         cache: false
+        // No sourceSize here. The drawer decodes the JPEG at the width it draws
+        // it, which is the whole point of the small view. This one takes every
+        // pixel Paper sent.
         fillMode: Image.PreserveAspectFit
-        horizontalAlignment: Image.AlignHCenter
-        verticalAlignment: Image.AlignVCenter
-        source: root.shotSource
-        sourceSize.width: Math.max(1, Math.round(width * (floatWindow.devicePixelRatio || 1)))
+        source: root.zoomed ? root.shotSource : ""
+        onStatusChanged: {
+          if (status !== Image.Ready) return
+          if (implicitWidth <= 0 || implicitHeight <= 0) return
+          root.zoomNaturalW = implicitWidth
+          root.zoomNaturalH = implicitHeight
+        }
       }
 
       Text {
-        anchors.centerIn: floatShot
-        visible: root.imagePath === "" || floatShot.status === Image.Error
+        anchors.centerIn: parent
+        visible: root.zoomed && (zoomShot.status === Image.Error || zoomShot.status === Image.Null)
         text: "No cached artboard"
         textFormat: Text.PlainText
         color: root.ink
         font.family: Style.menuFontFamily
         font.pixelSize: Style.font.body
-      }
-
-      MouseArea {
-        id: floatGesture
-        z: 1
-        anchors.fill: parent
-        acceptedButtons: Qt.LeftButton
-        property string mode: ""
-        property real pressX: 0
-        property real pressY: 0
-        property real originX: 0
-        property real originY: 0
-        property real originW: 0
-        property real originH: 0
-
-        function gestureAt(px, py) {
-          var edge = 10
-          var left = px <= edge
-          var right = px >= width - edge
-          var top = py <= edge
-          var bottom = py >= height - edge
-          if (left || right || top || bottom)
-            return (left ? "l" : "") + (right ? "r" : "") + (top ? "t" : "") + (bottom ? "b" : "")
-          if (py < floatStrip.height) return "move"
-          return ""
-        }
-
-        onPressed: function(mouse) {
-          mode = gestureAt(mouse.x, mouse.y)
-          if (mode === "") return
-          var global = floatCard.mapToGlobal(mouse.x, mouse.y)
-          pressX = global.x
-          pressY = global.y
-          originX = root.floatX
-          originY = root.floatY
-          originW = root.floatW
-          originH = root.floatH
-          root.floatDragging = true
-        }
-
-        onPositionChanged: function(mouse) {
-          if (!pressed || mode === "") return
-          var global = floatCard.mapToGlobal(mouse.x, mouse.y)
-          var dx = global.x - pressX
-          var dy = global.y - pressY
-          if (mode === "move") root.dragFloat(originX + dx, originY + dy, originW, originH)
-          else root.resizeFloat(mode, originX, originY, originW, originH, dx, dy)
-        }
-
-        onReleased: {
-          var ended = mode
-          mode = ""
-          root.floatDragging = false
-          if (ended === "") return
-          if (ended === "move") root.snapFloat()
-          else root.finishFloatSize()
-        }
-
-        onCanceled: {
-          mode = ""
-          root.floatDragging = false
-          root.finishFloatSize()
-        }
       }
     }
   }

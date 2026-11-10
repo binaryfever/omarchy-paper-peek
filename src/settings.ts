@@ -7,7 +7,7 @@ import { promisify } from "node:util"
 const execFileAsync = promisify(execFile)
 
 export type DrawerSide = "left" | "right"
-export type PeekMode = "drawer" | "float" | "dock"
+export type PeekMode = "drawer" | "dock"
 
 export type Settings = {
   readonly toggleHotkey: string
@@ -405,7 +405,7 @@ function takeSide(record: Record<string, unknown>, warnings: string[]): DrawerSi
 function takeMode(record: Record<string, unknown>, warnings: string[]): PeekMode {
   if (!("defaultMode" in record)) return DEFAULT_SETTINGS.defaultMode
   const value = record.defaultMode
-  if (value === "drawer" || value === "float" || value === "dock") return value
+  if (value === "drawer" || value === "dock") return value
   warnings.push(invalid("defaultMode", value, DEFAULT_SETTINGS.defaultMode))
   return DEFAULT_SETTINGS.defaultMode
 }

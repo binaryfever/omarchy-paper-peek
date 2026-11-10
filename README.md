@@ -4,7 +4,7 @@ Paper Peek shows a Paper artboard beside your code.
 
 The bar widget is a dot. The tooltip reads Live, Not live, or Off. Click the dot to open the drawer. Press `SUPER + SHIFT + H` to open it, and press that hotkey again to close it.
 
-The drawer slides in from the right. The header is two lines: the project and page, then the artboard name. Under the shot, the same column lists that page's artboards, and a click loads that artboard. Float moves that artboard to a card in the bottom-right corner. Browse opens the project list. The corner card stays up when you change workspace.
+The drawer slides in from the right. The header is two lines: the project and page, then the artboard name. Under the shot, the same column lists that page's artboards, and a click loads that artboard. A click on the artboard itself opens it at the size of the screen, and a click anywhere brings the drawer back. Browse opens the project list.
 
 ![Drawer open on the current artboard](docs/drawer.png)
 
@@ -44,11 +44,13 @@ The plugin id is `fmchale.paper-peek`.
 
 `browserHotkey` is empty until you set it. An empty value adds no hotkey. A set value runs `omarchy-shell fmchale.paper-peek browser`.
 
-While the drawer shows the artboard, F opens the corner float. Escape closes the drawer. Return opens the project browser.
+While the drawer shows the artboard, Space opens it at the size of the screen. Escape closes the drawer. Return opens the project browser.
 
-While the corner float is open, F returns to the drawer. C passes clicks through the card, and the label changes from Clicks to Passing. Escape hides the card.
+The open drawer does not hold your keyboard. It takes the keys when it opens, so Escape and Space work straight after the hotkey, and it gives them back the moment you click another window. Click the drawer again to steer it with the keys. `SUPER + SHIFT + H` closes it from anywhere, whatever has focus.
 
-`omarchy-shell fmchale.paper-peek layout` switches between the drawer and the corner float.
+While the artboard fills the screen, a click anywhere closes it, and so do Escape and Space. The drawer comes back on the same artboard, with the rows where you left them. Paper is not called, because the big view reads the JPEG already in the cache.
+
+`omarchy-shell fmchale.paper-peek zoom` opens the artboard at the size of the screen, and closes it again. Bind that command to a key of your own if you want the big view without the drawer's.
 
 ## Settings
 
@@ -63,7 +65,7 @@ Change Paper Peek in `~/.config/paper-peek/settings.json`. With no file, Paper P
 | `drawerSide` | `right` | `left` or `right` |
 | `drawerWidth` | `480` | Drawer width in pixels, from 240 to 1200 |
 | `refreshIntervalMs` | `2000` | Milliseconds between Paper checks, from 500 to 60000 |
-| `defaultMode` | `drawer` | `drawer`, `float`, or `dock` on the next open |
+| `defaultMode` | `drawer` | `drawer` or `dock` on the next open |
 | `paperAddress` | `127.0.0.1:29979` | Paper host and port. Requests use that host and port on the path `/mcp` |
 | `cacheBudgetMb` | `200` | Cap on `shots/`, in megabytes, from 0 to 1048576. 0 keeps the current artboard and the five recents |
 
