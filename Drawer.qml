@@ -71,8 +71,8 @@ Item {
   readonly property var activeSlots: view === "shot" ? boardSlots : browserSlots
   readonly property bool canZoom: view === "shot" && imagePath !== ""
   readonly property var zoomRect: Layout.zoomFrame(
-    zoomWindow.width,
-    zoomWindow.height,
+    window.width,
+    window.height,
     zoomNaturalW,
     zoomNaturalH,
     chrome)
@@ -1144,12 +1144,26 @@ Item {
       NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
     }
 
-    visible: reveal > 0.01
+    visible: reveal > 0.01 || root.zoomed
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.namespace: "fmchale-paper-peek"
-    WlrLayershell.keyboardFocus: root.opened && !root.zoomed ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+    // OnDemand while the drawer is a strip, never Exclusive. Exclusive sends
+    // every key to this surface for as long as the drawer is open, whatever
+    // window the compositor calls active, so the editor underneath goes deaf.
+    // Hyprland hands an OnDemand surface the keyboard when it maps, so Escape
+    // and Space work straight after the toggle hotkey, and it gives the
+    // keyboard up the moment another window takes focus.
+    //
+    // The big view is the one case for Exclusive. It covers the monitor, so
+    // there is nothing else to type into, and Escape has to reach it. It is
+    // painted in this same window rather than one of its own: a second
+    // surface would have to unmap to close, and the keyboard came back from
+    // that unmap belonging to no one.
+    WlrLayershell.keyboardFocus: root.zoomed
+      ? WlrKeyboardFocus.Exclusive
+      : (root.opened ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None)
 
     screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
     implicitWidth: screen ? screen.width : root.drawerWidth
@@ -1158,7 +1172,15 @@ Item {
     anchors.bottom: true
     anchors.left: true
     anchors.right: true
-    mask: Region { item: surface }
+    // The strip alone takes input, so a click past it reaches the window
+    // underneath. The big view takes the whole screen, so a click anywhere
+    // closes it.
+    mask: root.zoomed ? null : stripRegion
+
+    Region {
+      id: stripRegion
+      item: surface
+    }
 
     Rectangle {
       id: surface
@@ -1256,89 +1278,77 @@ Item {
         }
       }
     }
-  }
 
-  // The big view. This surface maps after the drawer's, so it stacks over it
-  // on the same layer. It carries no mask, so a click anywhere on the screen
-  // lands here and closes it. Tiled windows keep their places underneath, as
-  // they do under the drawer.
-  PanelWindow {
-    id: zoomWindow
-    visible: root.zoomed
-    color: "transparent"
-    screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
-    exclusionMode: ExclusionMode.Ignore
-    WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.namespace: "fmchale-paper-peek-zoom"
-    WlrLayershell.keyboardFocus: root.zoomed ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
-    anchors.top: true
-    anchors.bottom: true
-    anchors.left: true
-    anchors.right: true
-    implicitWidth: screen ? screen.width : 0
-    implicitHeight: screen ? screen.height : 0
-
-    Rectangle {
-      // The theme's popup background carries its own alpha, for the blur
-      // behind a panel. Over the desktop that reads as a window left ajar.
-      // The big view is for reading the artboard, so the backdrop takes the
-      // theme's color at full alpha and covers everything.
-      readonly property color base: Commons.Color.popups.background
-      anchors.fill: parent
-      color: Qt.rgba(base.r, base.g, base.b, 1)
-    }
-
-    MouseArea {
-      anchors.fill: parent
-      acceptedButtons: Qt.LeftButton | Qt.RightButton
-      onClicked: root.leaveZoom()
-    }
-
+    // The big view, over the strip and the rest of the screen. It lives in
+    // this window so that closing it hands the keyboard straight back to the
+    // drawer instead of to no one.
     Item {
-      id: zoomKeys
       anchors.fill: parent
-      focus: root.zoomed
-      Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Escape
-          || event.key === Qt.Key_Space
-          || event.key === Qt.Key_Return
-          || event.key === Qt.Key_Enter
-          || event.key === Qt.Key_F) {
-          root.leaveZoom()
-          event.accepted = true
+      visible: root.zoomed
+      z: 1
+
+      Rectangle {
+        // The theme's popup background carries its own alpha, for the blur
+        // behind a panel. Over the desktop that reads as a window left ajar.
+        // The big view is for reading the artboard, so the backdrop takes the
+        // theme's color at full alpha and covers everything.
+        readonly property color base: Commons.Color.popups.background
+        anchors.fill: parent
+        color: Qt.rgba(base.r, base.g, base.b, 1)
+      }
+
+      MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onClicked: root.leaveZoom()
+      }
+
+      Item {
+        id: zoomKeys
+        anchors.fill: parent
+        focus: root.zoomed
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Escape
+            || event.key === Qt.Key_Space
+            || event.key === Qt.Key_Return
+            || event.key === Qt.Key_Enter
+            || event.key === Qt.Key_F) {
+            root.leaveZoom()
+            event.accepted = true
+          }
         }
       }
-    }
 
-    Image {
-      id: zoomShot
-      x: root.zoomRect.x
-      y: root.zoomRect.y
-      width: root.zoomRect.width
-      height: root.zoomRect.height
-      asynchronous: true
-      cache: false
-      // No sourceSize here. The drawer decodes the JPEG at the width it draws
-      // it, which is the whole point of the small view. This one takes every
-      // pixel Paper sent.
-      fillMode: Image.PreserveAspectFit
-      source: root.zoomed ? root.shotSource : ""
-      onStatusChanged: {
-        if (status !== Image.Ready) return
-        if (implicitWidth <= 0 || implicitHeight <= 0) return
-        root.zoomNaturalW = implicitWidth
-        root.zoomNaturalH = implicitHeight
+      Image {
+        id: zoomShot
+        x: root.zoomRect.x
+        y: root.zoomRect.y
+        width: root.zoomRect.width
+        height: root.zoomRect.height
+        asynchronous: true
+        cache: false
+        // No sourceSize here. The drawer decodes the JPEG at the width it draws
+        // it, which is the whole point of the small view. This one takes every
+        // pixel Paper sent.
+        fillMode: Image.PreserveAspectFit
+        source: root.zoomed ? root.shotSource : ""
+        onStatusChanged: {
+          if (status !== Image.Ready) return
+          if (implicitWidth <= 0 || implicitHeight <= 0) return
+          root.zoomNaturalW = implicitWidth
+          root.zoomNaturalH = implicitHeight
+        }
       }
-    }
 
-    Text {
-      anchors.centerIn: parent
-      visible: root.zoomed && (zoomShot.status === Image.Error || zoomShot.status === Image.Null)
-      text: "No cached artboard"
-      textFormat: Text.PlainText
-      color: root.ink
-      font.family: Style.menuFontFamily
-      font.pixelSize: Style.font.body
+      Text {
+        anchors.centerIn: parent
+        visible: root.zoomed && (zoomShot.status === Image.Error || zoomShot.status === Image.Null)
+        text: "No cached artboard"
+        textFormat: Text.PlainText
+        color: root.ink
+        font.family: Style.menuFontFamily
+        font.pixelSize: Style.font.body
+      }
     }
   }
 

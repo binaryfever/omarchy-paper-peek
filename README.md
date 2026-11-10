@@ -46,6 +46,8 @@ The plugin id is `fmchale.paper-peek`.
 
 While the drawer shows the artboard, Space opens it at the size of the screen. Escape closes the drawer. Return opens the project browser.
 
+The open drawer does not hold your keyboard. It takes the keys when it opens, so Escape and Space work straight after the hotkey, and it gives them back the moment you click another window. Click the drawer again to steer it with the keys. `SUPER + SHIFT + H` closes it from anywhere, whatever has focus.
+
 While the artboard fills the screen, a click anywhere closes it, and so do Escape and Space. The drawer comes back on the same artboard, with the rows where you left them. Paper is not called, because the big view reads the JPEG already in the cache.
 
 `omarchy-shell fmchale.paper-peek zoom` opens the artboard at the size of the screen, and closes it again. Bind that command to a key of your own if you want the big view without the drawer's.
