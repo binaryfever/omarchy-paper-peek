@@ -36,6 +36,14 @@ function chrome(tokens) {
     // The big view's margin off the screen's edges. Twice the row gutter, so a
     // theme that widens the gutter widens this too.
     zoomMargin: tokens.rowPaddingX * 2,
+    // The control that opens the big view, measured from a real one so it
+    // keeps the theme's size for a panel action.
+    badge: tokens.badgeSize,
+    // Half the artboard's own margin holds that control off the artboard's
+    // corner: enough to read as resting on the image, little enough to stay
+    // part of it. Derived from the gutter, so a theme that widens the gutter
+    // widens this too.
+    badgeInset: Math.round(tokens.rowPaddingX / 2),
     boardRows: 4,
     floorRows: 1,
     secondaryDarken: 1.4,
@@ -393,6 +401,29 @@ function containFit(boxW, boxH, imageW, imageH) {
   return { x: x, y: y, width: width, height: height }
 }
 
+// The control that opens the big view belongs to the artboard it opens, so it
+// rides the image's own top right corner rather than the drawer's top bar,
+// where it read as acting on the drawer. The corner nearest the drawer's edge
+// keeps it in the same column as the header's own actions. An artboard too
+// small to give the control a corner without landing in its middle goes
+// without one; a click anywhere on the pane still opens it.
+function shotBadge(image, chromeRef) {
+  var size = chromeRef.badge
+  var inset = chromeRef.badgeInset
+  if (size <= 0) {
+    return null
+  }
+  var room = (size + inset) * 2
+  if (image.width < room || image.height < room) {
+    return null
+  }
+  return {
+    size: size,
+    x: image.x + image.width - inset - size,
+    y: image.y + inset,
+  }
+}
+
 function contentFrame(view, contentWidth, contentHeight, imageWidth, imageHeight, chromeRef) {
   if (view !== "shot") {
     return {
@@ -472,6 +503,7 @@ function contentFrame(view, contentWidth, contentHeight, imageWidth, imageHeight
       fit: "contain",
       height: shotHeight,
       image: image,
+      badge: shotBadge(image, chromeRef),
     },
     rule: chromeRef.rule,
     list: {
@@ -572,14 +604,13 @@ function artboardLabel(slots, nodeId) {
   return ""
 }
 
-function headerActions(view, holding, canZoom) {
+// The header's actions are the ones that act on the drawer: where it goes and
+// what it holds. The artboard carries its own control, in its own corner.
+function headerActions(view, holding) {
   var canBack = view === "pages" || (view === "shot" && holding)
   var actions = []
   if (canBack) {
     actions.push({ id: "back", icon: ACTION_ICON.back, tooltip: "Back" })
-  }
-  if (view === "shot" && canZoom) {
-    actions.push({ id: "zoom", icon: ACTION_ICON.zoom, tooltip: "Zoom" })
   }
   if (view === "shot") {
     actions.push({ id: "browse", icon: ACTION_ICON.browse, tooltip: "Browse" })
@@ -587,6 +618,11 @@ function headerActions(view, holding, canZoom) {
     actions.push({ id: "refresh", icon: ACTION_ICON.refresh, tooltip: "Refresh" })
   }
   return actions
+}
+
+function actionIcon(id) {
+  var icon = ACTION_ICON[id]
+  return typeof icon === "string" ? icon : ""
 }
 
 function statusDot(status) {
