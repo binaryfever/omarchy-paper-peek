@@ -5,6 +5,7 @@ var ACTION_ICON = {
   float: "\u{F0E5F}",
   browse: "\u{F14F7}",
   refresh: "\u{F0450}",
+  zoom: "\u{F0293}",
 }
 
 function chrome(tokens) {
@@ -25,6 +26,9 @@ function chrome(tokens) {
     // drawn at on any screen, instead of growing with the screen's height.
     // The cap measures the image's box. The pane adds a margin around it.
     shotAspect: 1.2,
+    // The big view's margin off the screen's edges. Twice the row gutter, so a
+    // theme that widens the gutter widens this too.
+    zoomMargin: tokens.rowPaddingX * 2,
     boardRows: 4,
     floorRows: 1,
     secondaryDarken: 1.4,
@@ -460,6 +464,26 @@ function contentFrame(view, contentWidth, contentHeight, imageWidth, imageHeight
   }
 }
 
+// The big view. The drawer's artboard is capped at the size the layout canvas
+// drew it at, which is too small to read the artboard itself. This fits the
+// same cached JPEG into the whole screen, less a margin on all four sides.
+// An unmeasured image takes the whole pane, because PreserveAspectFit
+// letterboxes it correctly until its natural size arrives.
+function zoomFrame(boxW, boxH, imageW, imageH, chromeRef) {
+  var margin = chromeRef.zoomMargin
+  var insetX = boxW > margin * 4 ? margin : 0
+  var insetY = boxH > margin * 4 ? margin : 0
+  var paneW = Math.max(0, boxW - insetX * 2)
+  var paneH = Math.max(0, boxH - insetY * 2)
+  if (imageW <= 0 || imageH <= 0) {
+    return { x: insetX, y: insetY, width: paneW, height: paneH }
+  }
+  var image = containFit(paneW, paneH, imageW, imageH)
+  image.x = image.x + insetX
+  image.y = image.y + insetY
+  return image
+}
+
 function nameOrId(name, id) {
   return name !== "" ? name : id
 }
@@ -539,11 +563,14 @@ function artboardLabel(slots, nodeId) {
   return ""
 }
 
-function headerActions(view, holding) {
+function headerActions(view, holding, canZoom) {
   var canBack = view === "pages" || (view === "shot" && holding)
   var actions = []
   if (canBack) {
     actions.push({ id: "back", icon: ACTION_ICON.back, tooltip: "Back" })
+  }
+  if (view === "shot" && canZoom) {
+    actions.push({ id: "zoom", icon: ACTION_ICON.zoom, tooltip: "Zoom" })
   }
   actions.push({ id: "float", icon: ACTION_ICON.float, tooltip: "Float" })
   if (view === "shot") {

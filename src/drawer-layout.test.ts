@@ -65,7 +65,14 @@ type LayoutApi = {
   drawerHeader: (input: Record<string, string | boolean>) => { title: string; trail: string }
   floatTitle: (catalogArtboard: string, memoryArtboard: string) => string
   artboardLabel: (slots: unknown, nodeId: string) => string
-  headerActions: (view: string, holding: boolean) => Array<{ id: string }>
+  zoomFrame: (
+    boxW: number,
+    boxH: number,
+    imageW: number,
+    imageH: number,
+    chromeRef: Record<string, number>,
+  ) => { x: number; y: number; width: number; height: number }
+  headerActions: (view: string, holding: boolean, canZoom: boolean) => Array<{ id: string }>
   statusDot: (status: string) => string
   statusWord: (status: string) => string
   showEmpty: (view: string, slots: unknown, pending: string, notice: string) => boolean
@@ -287,6 +294,76 @@ assert(tinyFrame.shot === null && tinyFrame.rule === 0 && tinyFrame.list.height 
 const browserFrame = Layout.contentFrame("pages", 480, 600, 0, 0, defaultChrome)
 assert(browserFrame.shot === null && browserFrame.list.id === "browser" && browserFrame.list.height === 600, "browser fills content")
 
+// This monitor is 3840 by 2160 at scale 1.6, so the big view's box is 2400 by
+// 1350 logical pixels.
+const screenW = 2400
+const screenH = 1350
+const zoomMargin = defaultChrome.zoomMargin
+const paneW = screenW - zoomMargin * 2
+const paneH = screenH - zoomMargin * 2
+
+const tallZoom = Layout.zoomFrame(screenW, screenH, 393, 852, defaultChrome)
+assert(tallZoom.height === paneH, "a portrait artboard fits the big view by its height")
+assert(tallZoom.width === Math.round(393 * (paneH / 852)), "portrait zoom keeps its aspect")
+assert(tallZoom.y === zoomMargin, "portrait zoom keeps its top margin")
+assert(
+  tallZoom.x === zoomMargin + Math.round((paneW - tallZoom.width) / 2),
+  "portrait zoom centers across the screen",
+)
+assert(
+  tallZoom.x >= zoomMargin && tallZoom.x + tallZoom.width <= screenW - zoomMargin,
+  "portrait zoom stays inside its margin",
+)
+assert(
+  tallZoom.y >= zoomMargin && tallZoom.y + tallZoom.height <= screenH - zoomMargin,
+  "portrait zoom stays under its margin",
+)
+
+const drawerShot = Layout.contentFrame("shot", 480, screenH, 393, 852, defaultChrome)
+assert(drawerShot.shot !== null, "the drawer still draws a shot on this screen")
+assert(
+  drawerShot.shot !== null && tallZoom.height >= drawerShot.shot.image.height * 2,
+  "the big view doubles the drawer's artboard",
+)
+
+// 1440 by 600 is wider than the pane, so it fits by its width.
+const wideZoom = Layout.zoomFrame(screenW, screenH, 1440, 600, defaultChrome)
+assert(wideZoom.width === paneW, "a wide artboard fits the big view by its width")
+assert(wideZoom.height === Math.round(600 * (paneW / 1440)), "wide zoom keeps its aspect")
+assert(wideZoom.x === zoomMargin, "wide zoom keeps its side margin")
+assert(
+  wideZoom.y === zoomMargin + Math.round((paneH - wideZoom.height) / 2),
+  "wide zoom centers down the screen",
+)
+
+// 16 by 9 is narrower than this pane, so it fits by its height instead, and
+// still keeps a margin either side.
+const sixteenNine = Layout.zoomFrame(screenW, screenH, 1920, 1080, defaultChrome)
+assert(sixteenNine.height === paneH, "a 16 by 9 artboard fits this pane by its height")
+assert(
+  sixteenNine.x >= zoomMargin && sixteenNine.x + sixteenNine.width <= screenW - zoomMargin,
+  "a 16 by 9 artboard keeps its side margin",
+)
+
+const unmeasuredZoom = Layout.zoomFrame(screenW, screenH, 0, 0, defaultChrome)
+assert(
+  unmeasuredZoom.x === zoomMargin &&
+    unmeasuredZoom.y === zoomMargin &&
+    unmeasuredZoom.width === paneW &&
+    unmeasuredZoom.height === paneH,
+  "an unmeasured artboard takes the whole pane",
+)
+
+const tinyZoom = Layout.zoomFrame(40, 30, 393, 852, defaultChrome)
+assert(tinyZoom.y === 0 && tinyZoom.height === 30, "a box too small for the margin drops it")
+assert(
+  tinyZoom.x >= 0 && tinyZoom.x + tinyZoom.width <= 40,
+  "a dropped margin still keeps the artboard inside the box",
+)
+
+const emptyZoom = Layout.zoomFrame(0, 0, 393, 852, defaultChrome)
+assert(emptyZoom.width === 0 && emptyZoom.height === 0, "an empty box draws nothing")
+
 const shotHeader = Layout.drawerHeader({
   view: "shot",
   shotHere: true,
@@ -322,12 +399,24 @@ const pageHold = Layout.drawerHeader({
 })
 assert(pageHold.title === "Home" && pageHold.title !== "Old name", "page hold shows page name not prior artboard")
 
-const shotActions = Layout.headerActions("shot", true)
+const shotActions = Layout.headerActions("shot", true, false)
 assert(
   shotActions.map((a) => a.id).join(",") === "back,float,browse",
   "shot with hold gets back float browse",
 )
-assert(Layout.headerActions("projects", false).map((a) => a.id).join(",") === "float,refresh", "projects actions")
+assert(
+  Layout.headerActions("shot", true, true).map((a) => a.id).join(",") === "back,zoom,float,browse",
+  "a cached shot gets a zoom action",
+)
+assert(
+  Layout.headerActions("shot", false, true).map((a) => a.id).join(",") === "zoom,float,browse",
+  "zoom needs no hold",
+)
+assert(
+  Layout.headerActions("projects", false, true).map((a) => a.id).join(",") === "float,refresh",
+  "projects actions take no zoom",
+)
+assert(Layout.headerActions("projects", false, false).map((a) => a.id).join(",") === "float,refresh", "projects actions")
 
 assert(Layout.statusDot("live") === "accent", "live dot")
 assert(Layout.statusDot("not-live") === "urgent", "not-live dot")

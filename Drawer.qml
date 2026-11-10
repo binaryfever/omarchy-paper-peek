@@ -41,6 +41,9 @@ Item {
   property int cursor: -1
   property real shotNaturalW: 0
   property real shotNaturalH: 0
+  property bool zoomed: false
+  property real zoomNaturalW: 0
+  property real zoomNaturalH: 0
   property string imagePath: ""
   property int shotRevision: 0
   property string peekStatus: "off"
@@ -79,6 +82,13 @@ Item {
   readonly property color inkSecondary: Qt.darker(ink, chrome.secondaryDarken)
   readonly property color inkEmpty: Qt.darker(ink, chrome.emptyDarken)
   readonly property var activeSlots: view === "shot" ? boardSlots : browserSlots
+  readonly property bool canZoom: view === "shot" && imagePath !== ""
+  readonly property var zoomRect: Layout.zoomFrame(
+    zoomWindow.width,
+    zoomWindow.height,
+    zoomNaturalW,
+    zoomNaturalH,
+    chrome)
   readonly property var frame: Layout.contentFrame(
     view,
     content.width,
@@ -136,6 +146,7 @@ Item {
 
   function runAction(id) {
     if (id === "back") root.back()
+    else if (id === "zoom") root.enterZoom()
     else if (id === "float") root.enterFloat()
     else if (id === "browse") root.showBrowser()
     else if (id === "refresh") root.refreshBrowse()
@@ -164,6 +175,31 @@ Item {
     if (act.type === "remember") root.rememberPlace(act.fileId, act.pageId, act.nodeId)
   }
 
+  // The big view reads the JPEG already on disk, so there is no Paper call
+  // here and no state to save. Leaving it puts the drawer back as it was.
+  function enterZoom() {
+    if (!root.canZoom) return
+    if (root.floated && root.passClicks) return
+    if (!root.shown()) return
+    root.zoomed = true
+    Qt.callLater(function() {
+      if (!root.zoomed) return
+      zoomKeys.forceActiveFocus()
+    })
+  }
+
+  function leaveZoom() {
+    if (!root.zoomed) return
+    root.zoomed = false
+    root.zoomNaturalW = 0
+    root.zoomNaturalH = 0
+  }
+
+  function toggleZoom() {
+    if (root.zoomed) root.leaveZoom()
+    else root.enterZoom()
+  }
+
   function paneKey(event) {
     if (event.key === Qt.Key_Escape) {
       if (root.view === "shot") {
@@ -172,6 +208,11 @@ Item {
       } else {
         root.closeBrowser()
       }
+      event.accepted = true
+      return
+    }
+    if (event.key === Qt.Key_Space) {
+      root.toggleZoom()
       event.accepted = true
       return
     }
@@ -272,6 +313,7 @@ Item {
   }
 
   function close(payloadJson) {
+    leaveZoom()
     floated = false
     opened = false
   }
@@ -317,6 +359,7 @@ Item {
 
   function undock() {
     if (!docked && !dockWindow.visible) return
+    leaveZoom()
     attachBody(false)
     docked = false
     dockWindow.visible = false
@@ -486,6 +529,7 @@ Item {
   }
 
   function togglePassClicks() {
+    leaveZoom()
     if (!floatKnown) placeDefault()
     passClicks = !passClicks
     saveFloat()
@@ -559,6 +603,7 @@ Item {
 
   function show(target) {
     if (!target || !target.kind) return
+    leaveZoom()
     if (target.kind === "projects") {
       pageHold = null
       view = "projects"
@@ -850,7 +895,7 @@ Item {
       spacing: root.chrome.columnGap
 
       Repeater {
-        model: Layout.headerActions(root.view, root.pageHold !== null)
+        model: Layout.headerActions(root.view, root.pageHold !== null, root.canZoom)
 
         PanelActionButton {
           required property var modelData
@@ -947,6 +992,15 @@ Item {
       color: root.ink
       font.family: Style.menuFontFamily
       font.pixelSize: Style.font.body
+    }
+
+    // A click on the artboard opens it at the size of the screen. The pane's
+    // margin counts as the artboard, so a near miss still opens it.
+    MouseArea {
+      anchors.fill: parent
+      acceptedButtons: Qt.LeftButton
+      cursorShape: root.canZoom ? Qt.PointingHandCursor : Qt.ArrowCursor
+      onClicked: root.enterZoom()
     }
   }
 
@@ -1189,6 +1243,10 @@ Item {
     function status(): string {
       return root.peekStatus
     }
+    function zoom(): string {
+      root.toggleZoom()
+      return root.zoomed ? "open" : "closed"
+    }
     function layout(): string {
       if (root.floated) {
         root.leaveFloatToDrawer()
@@ -1376,7 +1434,7 @@ Item {
     exclusionMode: ExclusionMode.Ignore
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.namespace: "fmchale-paper-peek"
-    WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+    WlrLayershell.keyboardFocus: root.opened && !root.zoomed ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
 
     screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
     implicitWidth: screen ? screen.width : root.drawerWidth
@@ -1448,7 +1506,7 @@ Item {
           anchors.bottom: footer.top
           anchors.left: parent.left
           anchors.right: parent.right
-          focus: (root.opened || root.docked) && !root.floated
+          focus: (root.opened || root.docked) && !root.floated && !root.zoomed
           Keys.onPressed: function(event) { root.paneKey(event) }
 
           ShotStage { id: shotStage }
@@ -1521,7 +1579,7 @@ Item {
     exclusionMode: ExclusionMode.Ignore
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.namespace: "fmchale-paper-peek-float"
-    WlrLayershell.keyboardFocus: root.floated && !root.passClicks ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
+    WlrLayershell.keyboardFocus: root.floated && !root.passClicks && !root.zoomed ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
     anchors.left: true
     anchors.top: true
     margins.left: root.floatX
@@ -1541,9 +1599,12 @@ Item {
 
       Item {
         anchors.fill: parent
-        focus: root.floated && !root.passClicks
+        focus: root.floated && !root.passClicks && !root.zoomed
         Keys.onPressed: function(event) {
-          if (event.key === Qt.Key_F) {
+          if (event.key === Qt.Key_Space) {
+            root.toggleZoom()
+            event.accepted = true
+          } else if (event.key === Qt.Key_F) {
             root.leaveFloatToDrawer()
             event.accepted = true
           } else if (event.key === Qt.Key_C) {
@@ -1643,6 +1704,13 @@ Item {
           else root.resizeFloat(mode, originX, originY, originW, originH, dx, dy)
         }
 
+        // The body of the card takes no drag gesture, so a click there opens
+        // the artboard at the size of the screen.
+        onClicked: function(mouse) {
+          if (gestureAt(mouse.x, mouse.y) !== "") return
+          root.enterZoom()
+        }
+
         onReleased: {
           var ended = mode
           mode = ""
@@ -1658,6 +1726,91 @@ Item {
           root.finishFloatSize()
         }
       }
+    }
+  }
+
+  // The big view. This surface maps after the drawer's and the float's, so it
+  // stacks over both on the same layer. It carries no mask, so a click
+  // anywhere on the screen lands here and closes it. Tiled windows keep their
+  // places underneath, as they do under the drawer.
+  PanelWindow {
+    id: zoomWindow
+    visible: root.zoomed
+    color: "transparent"
+    screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
+    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.namespace: "fmchale-paper-peek-zoom"
+    WlrLayershell.keyboardFocus: root.zoomed ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+    anchors.top: true
+    anchors.bottom: true
+    anchors.left: true
+    anchors.right: true
+    implicitWidth: screen ? screen.width : 0
+    implicitHeight: screen ? screen.height : 0
+
+    Rectangle {
+      // The theme's popup background carries its own alpha, for the blur
+      // behind a panel. Over the desktop that reads as a window left ajar, and
+      // the float card underneath shows through as a bright patch. The big
+      // view is for reading the artboard, so the backdrop takes the theme's
+      // color at full alpha and covers everything.
+      readonly property color base: Commons.Color.popups.background
+      anchors.fill: parent
+      color: Qt.rgba(base.r, base.g, base.b, 1)
+    }
+
+    MouseArea {
+      anchors.fill: parent
+      acceptedButtons: Qt.LeftButton | Qt.RightButton
+      onClicked: root.leaveZoom()
+    }
+
+    Item {
+      id: zoomKeys
+      anchors.fill: parent
+      focus: root.zoomed
+      Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Escape
+          || event.key === Qt.Key_Space
+          || event.key === Qt.Key_Return
+          || event.key === Qt.Key_Enter
+          || event.key === Qt.Key_F) {
+          root.leaveZoom()
+          event.accepted = true
+        }
+      }
+    }
+
+    Image {
+      id: zoomShot
+      x: root.zoomRect.x
+      y: root.zoomRect.y
+      width: root.zoomRect.width
+      height: root.zoomRect.height
+      asynchronous: true
+      cache: false
+      // No sourceSize here. The drawer decodes the JPEG at the width it draws
+      // it, which is the whole point of the small view. This one takes every
+      // pixel Paper sent.
+      fillMode: Image.PreserveAspectFit
+      source: root.zoomed ? root.shotSource : ""
+      onStatusChanged: {
+        if (status !== Image.Ready) return
+        if (implicitWidth <= 0 || implicitHeight <= 0) return
+        root.zoomNaturalW = implicitWidth
+        root.zoomNaturalH = implicitHeight
+      }
+    }
+
+    Text {
+      anchors.centerIn: parent
+      visible: root.zoomed && (zoomShot.status === Image.Error || zoomShot.status === Image.Null)
+      text: "No cached artboard"
+      textFormat: Text.PlainText
+      color: root.ink
+      font.family: Style.menuFontFamily
+      font.pixelSize: Style.font.body
     }
   }
 

@@ -4,7 +4,7 @@ Paper Peek shows a Paper artboard beside your code.
 
 The bar widget is a dot. The tooltip reads Live, Not live, or Off. Click the dot to open the drawer. Press `SUPER + SHIFT + H` to open it, and press that hotkey again to close it.
 
-The drawer slides in from the right. The header is two lines: the project and page, then the artboard name. Under the shot, the same column lists that page's artboards, and a click loads that artboard. Float moves that artboard to a card in the bottom-right corner. Browse opens the project list. The corner card stays up when you change workspace.
+The drawer slides in from the right. The header is two lines: the project and page, then the artboard name. Under the shot, the same column lists that page's artboards, and a click loads that artboard. A click on the artboard itself opens it at the size of the screen, and a click anywhere brings the drawer back. Float moves that artboard to a card in the bottom-right corner. Browse opens the project list. The corner card stays up when you change workspace.
 
 ![Drawer open on the current artboard](docs/drawer.png)
 
@@ -44,11 +44,15 @@ The plugin id is `fmchale.paper-peek`.
 
 `browserHotkey` is empty until you set it. An empty value adds no hotkey. A set value runs `omarchy-shell fmchale.paper-peek browser`.
 
-While the drawer shows the artboard, F opens the corner float. Escape closes the drawer. Return opens the project browser.
+While the drawer shows the artboard, Space opens it at the size of the screen. F opens the corner float. Escape closes the drawer. Return opens the project browser.
 
-While the corner float is open, F returns to the drawer. C passes clicks through the card, and the label changes from Clicks to Passing. Escape hides the card.
+While the artboard fills the screen, a click anywhere closes it, and so do Escape and Space. The drawer comes back on the same artboard, with the rows where you left them. Paper is not called, because the big view reads the JPEG already in the cache.
+
+While the corner float is open, a click on the artboard opens it at the size of the screen. F returns to the drawer. C passes clicks through the card, and the label changes from Clicks to Passing. Escape hides the card. A card that is passing clicks takes no click of its own, so Paper Peek leaves the big view alone until you press C again.
 
 `omarchy-shell fmchale.paper-peek layout` switches between the drawer and the corner float.
+
+`omarchy-shell fmchale.paper-peek zoom` opens the artboard at the size of the screen, and closes it again. Bind that command to a key of your own if you want the big view without the drawer's.
 
 ## Settings
 
