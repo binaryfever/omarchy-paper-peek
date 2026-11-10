@@ -17,6 +17,7 @@ export type Settings = {
   readonly refreshIntervalMs: number
   readonly defaultMode: PeekMode
   readonly paperAddress: string
+  readonly cacheBudgetMb: number
 }
 
 export type SettingsSource = "absent" | "file"
@@ -37,6 +38,7 @@ export type SettingsPayload = {
   readonly refreshIntervalMs: number
   readonly defaultMode: PeekMode
   readonly paperAddress: string
+  readonly cacheBudgetMb: number
   readonly paperUrl: string
   readonly warnings: readonly string[]
 }
@@ -67,7 +69,16 @@ const SETTING_KEYS = [
   "refreshIntervalMs",
   "defaultMode",
   "paperAddress",
+  "cacheBudgetMb",
 ] as const
+
+type _SettingsListCovers<T extends true> = T
+type _EverySettingIsListed = _SettingsListCovers<
+  Exclude<keyof Settings, (typeof SETTING_KEYS)[number]> extends never ? true : false
+>
+type _PayloadCopiesEverySetting = _SettingsListCovers<
+  Exclude<keyof Settings, keyof SettingsPayload> extends never ? true : false
+>
 
 const MOD_BITS: Readonly<Record<string, number>> = {
   SUPER: 64,
@@ -84,6 +95,8 @@ const WIDTH_MIN = 240
 const WIDTH_MAX = 1200
 const INTERVAL_MIN = 500
 const INTERVAL_MAX = 60_000
+const BUDGET_MIN = 0
+const BUDGET_MAX = 2 ** 20
 
 export const TOGGLE_DESCRIPTION = "Toggle Paper Peek"
 export const BROWSER_DESCRIPTION = "Open Paper Peek browser"
@@ -98,6 +111,7 @@ export const DEFAULT_SETTINGS: Settings = {
   refreshIntervalMs: 2000,
   defaultMode: "drawer",
   paperAddress: "127.0.0.1:29979",
+  cacheBudgetMb: 200,
 }
 
 export function settingsFilePath(): string {
@@ -154,6 +168,7 @@ export function parseSettings(text: string): SettingsReport {
     ),
     defaultMode: takeMode(parsed, warnings),
     paperAddress: takeAddress(parsed, warnings),
+    cacheBudgetMb: takeInt(parsed, "cacheBudgetMb", DEFAULT_SETTINGS.cacheBudgetMb, BUDGET_MIN, BUDGET_MAX, warnings),
   }
   return report(settings, warnings, "file")
 }
@@ -168,6 +183,7 @@ export function settingsPayload(report: SettingsReport): SettingsPayload {
     refreshIntervalMs: report.settings.refreshIntervalMs,
     defaultMode: report.settings.defaultMode,
     paperAddress: report.settings.paperAddress,
+    cacheBudgetMb: report.settings.cacheBudgetMb,
     paperUrl: report.paperUrl,
     warnings: report.warnings,
   }
@@ -404,7 +420,7 @@ function takeAddress(record: Record<string, unknown>, warnings: string[]): strin
 
 function takeInt(
   record: Record<string, unknown>,
-  key: "drawerWidth" | "refreshIntervalMs",
+  key: "drawerWidth" | "refreshIntervalMs" | "cacheBudgetMb",
   fallback: number,
   min: number,
   max: number,
