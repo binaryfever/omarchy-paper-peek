@@ -63,7 +63,6 @@ type LayoutApi = {
     list: { id: string; scroll: string; y: number; height: number }
   }
   drawerHeader: (input: Record<string, string | boolean>) => { title: string; trail: string }
-  floatTitle: (catalogArtboard: string, memoryArtboard: string) => string
   artboardLabel: (slots: unknown, nodeId: string) => string
   zoomFrame: (
     boxW: number,
@@ -380,7 +379,6 @@ const shotHeader = Layout.drawerHeader({
   holdPage: "",
 })
 assert(shotHeader.title === "01 Light · Home" && shotHeader.trail === "Site › Home", "shot header title and trail")
-assert(Layout.floatTitle("01 Light · Home", "") === "01 Light · Home", "float title is artboard alone")
 
 const pageHold = Layout.drawerHeader({
   view: "shot",
@@ -401,22 +399,28 @@ assert(pageHold.title === "Home" && pageHold.title !== "Old name", "page hold sh
 
 const shotActions = Layout.headerActions("shot", true, false)
 assert(
-  shotActions.map((a) => a.id).join(",") === "back,float,browse",
-  "shot with hold gets back float browse",
+  shotActions.map((a) => a.id).join(",") === "back,browse",
+  "shot with hold and no cached artboard gets back and browse",
 )
 assert(
-  Layout.headerActions("shot", true, true).map((a) => a.id).join(",") === "back,zoom,float,browse",
+  Layout.headerActions("shot", true, true).map((a) => a.id).join(",") === "back,zoom,browse",
   "a cached shot gets a zoom action",
 )
 assert(
-  Layout.headerActions("shot", false, true).map((a) => a.id).join(",") === "zoom,float,browse",
+  Layout.headerActions("shot", false, true).map((a) => a.id).join(",") === "zoom,browse",
   "zoom needs no hold",
 )
 assert(
-  Layout.headerActions("projects", false, true).map((a) => a.id).join(",") === "float,refresh",
+  Layout.headerActions("projects", false, true).map((a) => a.id).join(",") === "refresh",
   "projects actions take no zoom",
 )
-assert(Layout.headerActions("projects", false, false).map((a) => a.id).join(",") === "float,refresh", "projects actions")
+assert(Layout.headerActions("pages", false, true).map((a) => a.id).join(",") === "back,refresh", "pages actions")
+const everyAction = ["shot", "pages", "projects"].flatMap((view) =>
+  [true, false].flatMap((hold) =>
+    [true, false].flatMap((zoom) => Layout.headerActions(view, hold, zoom).map((a) => a.id)),
+  ),
+)
+assert(!everyAction.includes("float"), "no view offers a float action")
 
 assert(Layout.statusDot("live") === "accent", "live dot")
 assert(Layout.statusDot("not-live") === "urgent", "not-live dot")

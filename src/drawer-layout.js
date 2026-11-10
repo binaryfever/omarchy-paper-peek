@@ -2,7 +2,6 @@
 
 var ACTION_ICON = {
   back: "\u{F0141}",
-  float: "\u{F0E5F}",
   browse: "\u{F14F7}",
   refresh: "\u{F0450}",
   zoom: "\u{F0293}",
@@ -539,16 +538,6 @@ function drawerHeader(input) {
   return { title: "Projects", trail: "" }
 }
 
-function floatTitle(catalogArtboard, memoryArtboard) {
-  if (catalogArtboard !== "") {
-    return catalogArtboard
-  }
-  if (memoryArtboard !== "") {
-    return memoryArtboard
-  }
-  return "Paper Peek"
-}
-
 function artboardLabel(slots, nodeId) {
   if (nodeId === "" || !Array.isArray(slots)) {
     return ""
@@ -572,7 +561,6 @@ function headerActions(view, holding, canZoom) {
   if (view === "shot" && canZoom) {
     actions.push({ id: "zoom", icon: ACTION_ICON.zoom, tooltip: "Zoom" })
   }
-  actions.push({ id: "float", icon: ACTION_ICON.float, tooltip: "Float" })
   if (view === "shot") {
     actions.push({ id: "browse", icon: ACTION_ICON.browse, tooltip: "Browse" })
   } else {

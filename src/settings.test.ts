@@ -94,6 +94,15 @@ async function runTests(): Promise<void> {
     assert(bad.settings.drawerWidth === 480, "a too-small width falls back to 480")
     assert(bad.settings.refreshIntervalMs === 2000, "a too-small interval falls back to 2000")
     assert(bad.settings.defaultMode === "drawer", "a bad mode falls back to drawer")
+    const dropped = parseSettings(JSON.stringify({ defaultMode: "float" }))
+    assert(
+      dropped.settings.defaultMode === "drawer",
+      "the float mode is gone, so it falls back to drawer",
+    )
+    assert(
+      dropped.warnings.some((warning) => warning.includes("defaultMode")),
+      "a settings file still asking for float warns once",
+    )
     assert(bad.settings.paperAddress === DEFAULT_SETTINGS.paperAddress, "a url is not an address")
     assert(bad.warnings.length === 7, "each invalid value logs its own warning")
 
