@@ -78,6 +78,8 @@ type LayoutApi = {
   ) => { x: number; y: number; width: number; height: number }
   headerActions: (view: string, holding: boolean) => Array<{ id: string }>
   actionIcon: (id: string) => string
+  helperFault: (exitCode: number) => string
+  shownStatus: (status: string, fault: string) => string
   statusDot: (status: string) => string
   statusWord: (status: string) => string
   showEmpty: (view: string, slots: unknown, pending: string, notice: string) => boolean
@@ -540,6 +542,25 @@ assert(!everyAction.includes("zoom"), "no view offers a zoom action in the heade
 assert(Layout.actionIcon("zoom") !== "", "the zoom glyph is still reachable by id")
 assert(Layout.actionIcon("nope") === "", "an unknown action id has no glyph")
 
+// A plugin that says nothing looks exactly like Paper being closed. The one
+// fault the reader can do something about has to name itself.
+assert(Layout.helperFault(0) === "", "a helper that ran reports no fault")
+assert(Layout.helperFault(3) === "", "the helper's own exit codes are its business, not faults")
+assert(
+  Layout.helperFault(127).toLowerCase().includes("node"),
+  "a runtime that is not on the path names node",
+)
+assert(
+  Layout.helperFault(126) !== "" && Layout.helperFault(126) !== Layout.helperFault(127),
+  "a helper that may not be run says something else",
+)
+
+// A status read from a file outlives the helper that wrote it, so "Live" would
+// otherwise sit in the footer under the line saying nothing can be checked.
+assert(Layout.shownStatus("live", "") === "live", "a working helper is believed")
+assert(Layout.shownStatus("live", "no node") === "off", "a fault retires a stale Live")
+assert(Layout.shownStatus("not-live", "no node") === "off", "and a stale Not live too")
+
 assert(Layout.statusDot("live") === "accent", "live dot")
 assert(Layout.statusDot("not-live") === "urgent", "not-live dot")
 assert(Layout.statusDot("off") === "muted", "off dot")
@@ -690,6 +711,37 @@ assert(
 assert(
   drawerSource.includes("onOpenedChanged: if (root.opened) root.probeStatus()"),
   "opening the drawer checks at once rather than waiting out the idle interval",
+)
+
+assert(
+  drawerSource.includes("root.helperFault = Layout.helperFault(exitCode)"),
+  "the drawer takes its fault from the helper's exit code",
+)
+assert(
+  countNeedle(drawerSource, "root.noteExit(exitCode)") === 2,
+  "the status check and the command path both report their exit code",
+)
+assert(
+  drawerSource.includes("text: root.noticeLine"),
+  "the drawer shows the fault where it shows its notices",
+)
+// Otherwise the drawer answers the reader twice: the fault says there is no
+// node, and "Nothing cached yet" offers a competing reason beside it.
+assert(
+  countNeedle(
+    drawerSource,
+    "Layout.showEmpty(root.view, root.activeSlots, root.pending, root.noticeLine)",
+  ) === 2,
+  "a fault blocks the empty placeholder the way a notice does",
+)
+assert(
+  !drawerSource.includes("Layout.statusWord(root.peekStatus)") &&
+    drawerSource.includes("Layout.statusWord(root.shownStatus)"),
+  "the footer's word goes through the fault, not straight to the raw status",
+)
+assert(
+  !drawerSource.includes("root.dotColor(root.peekStatus)"),
+  "and so does the dot beside it",
 )
 
 const tokensBody = functionBody(drawerSource, "styleTokens")
