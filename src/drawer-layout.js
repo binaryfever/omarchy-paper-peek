@@ -625,6 +625,30 @@ function actionIcon(id) {
   return typeof icon === "string" ? icon : ""
 }
 
+// The helper is a shell shim that execs Node. A shell answers 127 when it
+// cannot find what it was asked to run, and 126 when it finds it but may not
+// run it. Both arrive here as the plugin saying nothing at all, and a plugin
+// saying nothing looks exactly like Paper being closed. It is not the same
+// thing, and only one of them is the reader's to fix.
+function helperFault(exitCode) {
+  if (exitCode === 127) {
+    return "Paper Peek reads Paper through Node, and there is no node on the path."
+  }
+  if (exitCode === 126) {
+    return "Paper Peek cannot run its own helper. Check that scripts/paper-fetch is executable."
+  }
+  return ""
+}
+
+// The status word is read from a file the helper writes, so it is only ever as
+// current as the last run that worked. A helper that will not run leaves that
+// file standing, and "Live" then sits in the footer directly under the line
+// saying nothing can be checked. The drawer does not know what Paper is doing,
+// and the honest answer to that is the one it already has for not knowing.
+function shownStatus(status, fault) {
+  return fault === "" ? status : "off"
+}
+
 function statusDot(status) {
   if (status === "live") {
     return "accent"

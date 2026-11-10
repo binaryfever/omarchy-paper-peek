@@ -51,6 +51,8 @@ Item {
   property string peekStatus: "off"
   property string view: "shot"
   property string notice: ""
+  // Set from the helper's exit code, cleared by the next run that works.
+  property string helperFault: ""
   property string pending: ""
   property var queued: null
   property string browseFileId: ""
@@ -86,6 +88,13 @@ Item {
     shotHere ? shotNaturalH : 0,
     chrome)
   readonly property var headerCopy: Layout.drawerHeader(headerInput())
+  // A helper that will not run outranks a notice from one that did, because
+  // every other line in the drawer is then describing a cache that cannot be
+  // refreshed, and the reader is owed the reason.
+  readonly property string noticeLine: root.helperFault !== "" ? root.helperFault : root.notice
+  // What the footer is entitled to claim, which is nothing while the helper
+  // that would check is the thing that is broken.
+  readonly property string shownStatus: Layout.shownStatus(root.peekStatus, root.helperFault)
 
   // Changing the interval restarts the countdown, so without this the dot
   // would hold whatever the idle rate last saw for a further two seconds, in
@@ -235,6 +244,12 @@ Item {
       else root.activateSlot(root.cursor)
       event.accepted = true
     }
+  }
+
+  // Every run of the helper passes its exit code through here, so a run that
+  // works clears what a broken one said.
+  function noteExit(exitCode) {
+    root.helperFault = Layout.helperFault(exitCode)
   }
 
   function applyStatus(text) {
@@ -741,13 +756,13 @@ Item {
       height: root.chrome.dot
       radius: height / 2
       anchors.verticalCenter: parent.verticalCenter
-      color: root.dotColor(root.peekStatus)
+      color: root.dotColor(root.shownStatus)
     }
 
     Text {
       x: statusLine.cols.textX + root.chrome.dot + root.chrome.columnGap
       width: Math.max(0, parent.width - x - root.chrome.gutter)
-      text: Layout.statusWord(root.peekStatus)
+      text: Layout.statusWord(root.shownStatus)
       textFormat: Text.PlainText
       elide: Text.ElideRight
       maximumLineCount: 1
@@ -1002,7 +1017,10 @@ Item {
       waitForEnd: true
       onStreamFinished: root.finishCommand(text)
     }
-    onExited: root.drainCommand()
+    onExited: function(exitCode) {
+      root.noteExit(exitCode)
+      root.drainCommand()
+    }
   }
 
   ShellIpc {
@@ -1024,7 +1042,7 @@ Item {
       return root.shown() ? "open" : "closed"
     }
     function status(): string {
-      return root.peekStatus
+      return root.shownStatus
     }
     function zoom(): string {
       root.toggleZoom()
@@ -1086,6 +1104,7 @@ Item {
       waitForEnd: true
       onStreamFinished: root.applyStatus(text)
     }
+    onExited: function(exitCode) { root.noteExit(exitCode) }
   }
 
   Process {
@@ -1283,8 +1302,8 @@ Item {
           x: cols.textX
           width: cols.textWidth
           anchors.top: header.bottom
-          height: root.notice === "" ? 0 : implicitHeight
-          text: root.notice
+          height: root.noticeLine === "" ? 0 : implicitHeight
+          text: root.noticeLine
           textFormat: Text.PlainText
           wrapMode: Text.Wrap
           color: root.ink
@@ -1320,12 +1339,12 @@ Item {
 
           RegionList {
             id: regionList
-            visible: !Layout.showEmpty(root.view, root.activeSlots, root.pending, root.notice)
+            visible: !Layout.showEmpty(root.view, root.activeSlots, root.pending, root.noticeLine)
           }
 
           Text {
             readonly property var cols: Layout.columns(parent.width, root.chrome, 0)
-            visible: Layout.showEmpty(root.view, root.activeSlots, root.pending, root.notice)
+            visible: Layout.showEmpty(root.view, root.activeSlots, root.pending, root.noticeLine)
             anchors.verticalCenter: parent.verticalCenter
             x: cols.textX
             width: cols.textWidth
