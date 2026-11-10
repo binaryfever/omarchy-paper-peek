@@ -105,9 +105,27 @@ function shotPayload(jpeg: Uint8Array, note: string | null): unknown {
   return { content }
 }
 
+// Every scratch directory this file makes goes on one list, and the list is
+// emptied in the finally below. A test that made its own and forgot left it in
+// /tmp for good: 336 of them had piled up before this.
+const scratch: string[] = []
+
+async function scratchDir(prefix: string): Promise<string> {
+  const made = await mkdtemp(join(tmpdir(), prefix))
+  scratch.push(made)
+  return made
+}
+
+async function clearScratch(): Promise<void> {
+  while (scratch.length > 0) {
+    const path = scratch.pop()
+    if (path !== undefined) await rm(path, { recursive: true, force: true })
+  }
+}
+
 async function runTests(): Promise<void> {
   const root = fileURLToPath(new URL("..", import.meta.url))
-  const dir = await mkdtemp(join(tmpdir(), "paper-fetch-"))
+  const dir = await scratchDir("paper-fetch-")
   const jpeg = makeMinimalJpeg(8, 6)
   const target = ids()
   const previousLog = process.env.PAPER_PEEK_LOG
@@ -155,7 +173,7 @@ async function runTests(): Promise<void> {
     assert(projects.index.resources[0]?.kind === "closed-file", "stored list shows the file closed")
 
     const textThenImage = scriptedPaper({
-      cacheDir: await mkdtemp(join(tmpdir(), "paper-fetch-order-")),
+      cacheDir: await scratchDir("paper-fetch-order-"),
       listResources: () => listPayload(true),
       screenshot: () => ({
         content: [
@@ -171,7 +189,7 @@ async function runTests(): Promise<void> {
     const folderId = parseFileId("01M3FSZV4GNV5WV4WPRBS76WRB")
     assert(folderId !== null, "folder id parses as a file id alphabet")
     const folderSource = scriptedPaper({
-      cacheDir: await mkdtemp(join(tmpdir(), "paper-fetch-folder-")),
+      cacheDir: await scratchDir("paper-fetch-folder-"),
       listResources: () => ({
         content: [
           {
@@ -191,7 +209,7 @@ async function runTests(): Promise<void> {
     assert(folderShot.kind === "unavailable" && folderShot.reason === "not-a-file", "a folder is not a screenshot target")
     assert(folderShots === 0, "a folder does not call get_screenshot")
 
-    const downDir = await mkdtemp(join(tmpdir(), "paper-fetch-down-"))
+    const downDir = await scratchDir("paper-fetch-down-")
     const seeded = scriptedPaper({
       cacheDir: downDir,
       listResources: () => listPayload(true),
@@ -212,7 +230,7 @@ async function runTests(): Promise<void> {
     assert(downShot.kind === "cached" && downShot.reason === "paper-down", "Paper down returns the stored JPEG")
 
     const empty = scriptedPaper({
-      cacheDir: await mkdtemp(join(tmpdir(), "paper-fetch-empty-")),
+      cacheDir: await scratchDir("paper-fetch-empty-"),
       listResources: () => {
         throw new Error("connection refused")
       },
@@ -247,7 +265,7 @@ async function runTests(): Promise<void> {
 
     const pageId = parsePageId("p-3-0")
     assert(pageId !== null, "page id parses")
-    const catalogDir = await mkdtemp(join(tmpdir(), "paper-fetch-catalog-"))
+    const catalogDir = await scratchDir("paper-fetch-catalog-")
     let infoCalls = 0
     let widthShots = 0
     const catalog = scriptedPaper({
@@ -313,7 +331,7 @@ async function runTests(): Promise<void> {
     )
     const missingPages = await listPages(
       scriptedPaper({
-        cacheDir: await mkdtemp(join(tmpdir(), "paper-fetch-pages-down-")),
+        cacheDir: await scratchDir("paper-fetch-pages-down-"),
         listResources: () => {
           throw new Error("connection refused")
         },
@@ -352,7 +370,7 @@ async function runTests(): Promise<void> {
     }
 
     const cli = scriptedPaper({
-      cacheDir: await mkdtemp(join(tmpdir(), "paper-fetch-cli-")),
+      cacheDir: await scratchDir("paper-fetch-cli-"),
       listResources: () => listPayload(false),
       basicInfo: () => {
         throw new Error("pages must not call Paper when the cache is absent and we only check argv")
@@ -373,7 +391,7 @@ async function runTests(): Promise<void> {
     assert(!artboardChosen("{"), "broken current json is not an artboard")
     let statusCalls = 0
     const idle = scriptedPaper({
-      cacheDir: await mkdtemp(join(tmpdir(), "paper-fetch-status-off-")),
+      cacheDir: await scratchDir("paper-fetch-status-off-"),
       listResources: () => {
         statusCalls += 1
         return listPayload(true)
@@ -382,22 +400,22 @@ async function runTests(): Promise<void> {
     assert((await reportStatus(idle, "")) === "off", "no artboard reports off")
     assert(statusCalls === 0, "off does not call Paper")
     const up = scriptedPaper({
-      cacheDir: await mkdtemp(join(tmpdir(), "paper-fetch-status-live-")),
+      cacheDir: await scratchDir("paper-fetch-status-live-"),
       listResources: () => listPayload(true),
     })
     assert((await reportStatus(up, chosen)) === "live", "a reachable Paper reports live")
     const closed = scriptedPaper({
-      cacheDir: await mkdtemp(join(tmpdir(), "paper-fetch-status-down-")),
+      cacheDir: await scratchDir("paper-fetch-status-down-"),
       listResources: () => {
         throw new Error("connection refused")
       },
     })
     assert((await reportStatus(closed, chosen)) === "not-live", "an unreachable Paper reports not-live")
 
-    const statusRoot = await mkdtemp(join(tmpdir(), "paper-fetch-status-cli-"))
+    const statusRoot = await scratchDir("paper-fetch-status-cli-")
     const statusFile = join(statusRoot, "status")
     const currentFile = join(statusRoot, "current.json")
-    const statusCache = await mkdtemp(join(tmpdir(), "paper-fetch-status-cache-"))
+    const statusCache = await scratchDir("paper-fetch-status-cache-")
     const offCli = spawnSync(script, ["status"], {
       encoding: "utf8",
       env: {
@@ -425,7 +443,7 @@ async function runTests(): Promise<void> {
     const cacheNames = await readdir(statusCache)
     assert(!cacheNames.includes("projects.json"), "status does not write the project cache")
 
-    const watchDir = await mkdtemp(join(tmpdir(), "paper-fetch-watch-"))
+    const watchDir = await scratchDir("paper-fetch-watch-")
     const watchLog = join(watchDir, "refresh.log")
     process.env.PAPER_PEEK_LOG = watchLog
     let watchShots = 0
@@ -494,7 +512,7 @@ async function runTests(): Promise<void> {
       (await readFile(watchLog, "utf8")).trim().endsWith(`check ${FILE} ${NODE} down`),
       "Paper down is logged as down",
     )
-    const blindDir = await mkdtemp(join(tmpdir(), "paper-fetch-watch-blind-"))
+    const blindDir = await scratchDir("paper-fetch-watch-blind-")
     process.env.PAPER_PEEK_LOG = join(blindDir, "refresh.log")
     const blind = scriptedPaper({
       cacheDir: blindDir,
@@ -518,7 +536,7 @@ async function runTests(): Promise<void> {
     else process.env.PAPER_PEEK_LOG = previousLog
     if (previousSettings === undefined) delete process.env.PAPER_PEEK_SETTINGS
     else process.env.PAPER_PEEK_SETTINGS = previousSettings
-    await rm(dir, { recursive: true, force: true })
+    await clearScratch()
   }
 
   console.log("paper-fetch.test.ts: ok")
@@ -607,8 +625,8 @@ type SavedMemory = {
 }
 
 async function memoryTests(): Promise<void> {
-  const stateDir = await mkdtemp(join(tmpdir(), "paper-peek-state-"))
-  const cacheDir = await mkdtemp(join(tmpdir(), "paper-peek-cache-"))
+  const stateDir = await scratchDir("paper-peek-state-")
+  const cacheDir = await scratchDir("paper-peek-cache-")
   const statePath = join(stateDir, "current.json")
   const previousState = process.env.PAPER_PEEK_STATE
   const previousCache = process.env.PAPER_PEEK_CACHE

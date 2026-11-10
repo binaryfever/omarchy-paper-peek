@@ -77,10 +77,13 @@ BarWidget {
     tooltipText: root.peekStatus === "live" ? "Live" : (root.peekStatus === "not-live" ? "Not live" : "Off")
     onPressed: root.openDrawer()
 
+    // The same dot the drawer's status line draws, built the same way: two of
+    // the theme's small steps across, so a theme that scales its spacing
+    // scales the dot with it.
     Rectangle {
-      width: 8
-      height: 8
-      radius: 4
+      width: Style.spacing.sm * 2
+      height: width
+      radius: height / 2
       anchors.centerIn: parent
       color: root.peekStatus === "live" ? root.liveColor : (root.peekStatus === "not-live" ? Commons.Color.urgent : Commons.Color.muted)
     }
