@@ -646,14 +646,14 @@ Item {
 
   component HeaderStrip: Item {
     id: headerStrip
-    implicitHeight: Math.max(titleCol.implicitHeight, actionRow.implicitHeight) + root.chrome.columnGap * 2 + root.chrome.rule
+    implicitHeight: Math.max(titleCol.implicitHeight, actionRow.implicitHeight) + root.chrome.framePadY * 2 + root.chrome.rule
     height: implicitHeight
     readonly property var cols: Layout.columns(width, root.chrome, actionRow.implicitWidth)
 
     Column {
       id: titleCol
       x: headerStrip.cols.textX
-      y: root.chrome.columnGap
+      y: root.chrome.framePadY
       width: headerStrip.cols.titleWidth
       spacing: root.chrome.titleGap
 
@@ -666,7 +666,9 @@ Item {
         elide: Text.ElideRight
         color: root.ink
         font.family: Style.menuFontFamily
-        font.pixelSize: Style.font.title
+        // The artboard's name is what the drawer is for, so it sits a step
+        // above the rows that lead to it and two above the chrome around it.
+        font.pixelSize: Style.font.heading
       }
 
       Text {
@@ -846,6 +848,9 @@ Item {
       visible: rowItem.face.presentation === "caption"
       text: rowItem.slot.label
       elide: Text.ElideRight
+      // Replaces PanelSectionHeader's own glyph-overshoot reserve. Two gutters
+      // clear that sliver many times over, so nothing gets beheaded by the clip.
+      topPadding: root.chrome.captionLead
       foreground: root.ink
       fontFamily: Style.menuFontFamily
       fontSize: Style.font.caption
