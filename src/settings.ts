@@ -100,8 +100,8 @@ const BUDGET_MAX = 2 ** 20
 
 export const TOGGLE_DESCRIPTION = "Toggle Paper Peek"
 export const BROWSER_DESCRIPTION = "Open Paper Peek browser"
-export const TOGGLE_COMMAND = "omarchy-shell fmchale.paper-peek toggle"
-export const BROWSER_COMMAND = "omarchy-shell fmchale.paper-peek browser"
+export const TOGGLE_COMMAND = "omarchy-shell binaryfever.paper-peek toggle"
+export const BROWSER_COMMAND = "omarchy-shell binaryfever.paper-peek browser"
 
 export const DEFAULT_SETTINGS: Settings = {
   toggleHotkey: "SUPER + SHIFT + H",

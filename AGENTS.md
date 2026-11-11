@@ -7,7 +7,7 @@ Work is tracked in Linear, project "Paper Peek" (team Fmchale, issue prefix FMC)
 How it works
 Platform: Omarchy 4 on Arch Linux with Hyprland. The Omarchy shell (omarchy-shell) is a single Quickshell process; every bar widget, panel, and overlay is a plugin.
 Plugin code: QML and JavaScript. Entry points are declared in manifest.json at the repo root.
-Plugin id: fmchale.paper-peek. Never change it. The omarchy. prefix is reserved for first-party plugins.
+Plugin id: binaryfever.paper-peek. It is settled, and FMC-711 was the one time it moved: it was fmchale.paper-peek until the id was about to be published with a personal name in it. The prefix is there to stop two authors colliding on one plugin name, and the omarchy. prefix is reserved for first-party plugins. The directory name has to match the id, and the decision records written before FMC-711 still name the old one, because they record what was true when they were written.
 Design source: Paper Desktop's local MCP server at http://127.0.0.1:29979/mcp. Paper Desktop must be running. `list_resources` works when no file is open. A screenshot requires the file to already be open, because screenshotting a closed file opens a tab.
 Always read by id. Calls without a file id (like get_basic_info) fail with "Open a Paper file" when nothing is open. Pass the file id and node id on every read.
 What by-id reads do to Paper: `list_resources` does not change which files are open. `get_basic_info` with a file id opens that file as a background tab, and there is no tool to close it. `get_screenshot` for a file that is already open leaves those flags unchanged. `get_screenshot` for a closed file opens that file. `scripts/paper-fetch` calls `get_screenshot` only when `list_resources` shows the file open.
@@ -34,26 +34,26 @@ docs/decisions/        decision records
 AGENTS.md              this file
 Development loop
 
-The git checkout is the real directory ~/.config/omarchy/plugins/fmchale.paper-peek. The folder name is the id in manifest.json. /home/fred/Projects/omarchy-paper-peek is a symlink to that directory, so Cursor still opens the same files.
+The git checkout is the real directory ~/.config/omarchy/plugins/binaryfever.paper-peek. The folder name is the id in manifest.json. /home/fred/Projects/omarchy-paper-peek is a symlink to that directory, so Cursor still opens the same files.
 
-FMC-666 measured the reload on this machine. While the plugins entry was a symlink to the checkout, a save wrote the target inode. journalctl --user -t omarchy-shell did not print Local plugin changed, reloading: fmchale.paper-peek, and the bar kept the old label. inotifywait -r watches ~/.config/omarchy/plugins and does not walk symlinks.
+FMC-666 measured the reload on this machine. While the plugins entry was a symlink to the checkout, a save wrote the target inode. journalctl --user -t omarchy-shell did not print Local plugin changed, reloading: binaryfever.paper-peek, and the bar kept the old label. inotifywait -r watches ~/.config/omarchy/plugins and does not walk symlinks.
 
 After the checkout itself was that real directory, the same save printed the journal line. The bar still kept the old label. omarchy-shell shell rescanPlugins left the label unchanged. omarchy restart shell loaded BarWidget.qml from disk. Edit the real directory, then run omarchy restart shell to see a QML change. Leave the plugins path as a real directory.
 
 omarchy plugin validate fails on /home/fred/Projects/omarchy-paper-peek. That path is a symlink, and the validator rejects a symlink that find reports. Validate the real directory.
 
-To take the label off the bar, run omarchy plugin disable fmchale.paper-peek. omarchy plugin remove asks for confirmation and then deletes this checkout, because the directory contains .git.
+To take the label off the bar, run omarchy plugin disable binaryfever.paper-peek. omarchy plugin remove asks for confirmation and then deletes this checkout, because the directory contains .git.
 
 Verifying work
 
 Run these before calling any task done:
 
 ```bash
-omarchy plugin validate ~/.config/omarchy/plugins/fmchale.paper-peek
+omarchy plugin validate ~/.config/omarchy/plugins/binaryfever.paper-peek
 omarchy plugin list
 ```
 
-Shell logs: `journalctl --user -t omarchy-shell`. A save under the plugin directory prints `Local plugin changed, reloading: fmchale.paper-peek`. The bar shows the new QML after `omarchy restart shell`.
+Shell logs: `journalctl --user -t omarchy-shell`. A save under the plugin directory prints `Local plugin changed, reloading: binaryfever.paper-peek`. The bar shows the new QML after `omarchy restart shell`.
 Window layout checks: hyprctl clients (tiled windows must not move when the drawer opens).
 Paper checks: scripts/paper-probe (once it exists) lists Paper's tools and runs the read calls.
 

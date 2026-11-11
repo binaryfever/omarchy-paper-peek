@@ -16,7 +16,7 @@ Item {
   readonly property string statePath: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/paper-peek/current.json"
   readonly property string statusPath: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/paper-peek/status"
   readonly property string cacheDir: Quickshell.env("PAPER_PEEK_CACHE") || (home + "/.cache/paper-peek")
-  readonly property string fetchScript: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omarchy/plugins/fmchale.paper-peek/scripts/paper-fetch"
+  readonly property string fetchScript: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omarchy/plugins/binaryfever.paper-peek/scripts/paper-fetch"
   readonly property string absentCatalog: cacheDir + "/absent"
   readonly property string settingsDir: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/paper-peek"
   readonly property string settingsPath: settingsDir + "/settings.json"
@@ -1024,7 +1024,7 @@ Item {
   }
 
   ShellIpc {
-    target: "fmchale.paper-peek"
+    target: "binaryfever.paper-peek"
     function open(): string {
       root.present()
       return root.shown() ? "open" : "closed"
@@ -1229,7 +1229,7 @@ Item {
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
     WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.namespace: "fmchale-paper-peek"
+    WlrLayershell.namespace: "binaryfever-paper-peek"
     // OnDemand while the drawer is a strip, never Exclusive. Exclusive sends
     // every key to this surface for as long as the drawer is open, whatever
     // window the compositor calls active, so the editor underneath goes deaf.

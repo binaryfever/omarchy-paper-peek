@@ -8,9 +8,9 @@ description: >-
 
 # Verify Paper Peek
 
-Paper Peek is an Omarchy shell plugin (`fmchale.paper-peek`). The running app is one widget on the top bar of the user's Hyprland session. The widget paints the words `Paper Peek`. There is no drawer, page list, or artboard view in the tree yet. `BarWidget.qml` is a label.
+Paper Peek is an Omarchy shell plugin (`binaryfever.paper-peek`). The running app is one widget on the top bar of the user's Hyprland session. The widget paints the words `Paper Peek`. There is no drawer, page list, or artboard view in the tree yet. `BarWidget.qml` is a label.
 
-The shell is the single long-lived `omarchy-shell` process for this Wayland display. A second shell would fight that process for the bar. Verification never starts one, never restarts the shell, and never enables, disables, moves, or removes the plugin. `omarchy plugin remove fmchale.paper-peek` deletes the git checkout.
+The shell is the single long-lived `omarchy-shell` process for this Wayland display. A second shell would fight that process for the bar. Verification never starts one, never restarts the shell, and never enables, disables, moves, or removes the plugin. `omarchy plugin remove binaryfever.paper-peek` deletes the git checkout.
 
 ## Launch
 
@@ -18,7 +18,7 @@ There is no server to start and no data directory to seed. The label reads nothi
 
 Ready means the live shell already shows the widget. Run doctor. `verdict: worth-driving` is the ready line. If doctor exits non-zero, stop. Do not run `omarchy restart shell`, `omarchy plugin enable`, or `qs` to make it ready.
 
-The checkout and the installed plugin are the same real directory: `~/.config/omarchy/plugins/fmchale.paper-peek`. `/home/fred/Projects/omarchy-paper-peek` is a symlink to it. Writes under that directory print `Local plugin changed, reloading: fmchale.paper-peek` in `journalctl --user -t omarchy-shell`. The bar label still comes from the QML the shell last started with until someone restarts the shell. Verification does not restart it.
+The checkout and the installed plugin are the same real directory: `~/.config/omarchy/plugins/binaryfever.paper-peek`. `/home/fred/Projects/omarchy-paper-peek` is a symlink to it. Writes under that directory print `Local plugin changed, reloading: binaryfever.paper-peek` in `journalctl --user -t omarchy-shell`. The bar label still comes from the QML the shell last started with until someone restarts the shell. Verification does not restart it.
 
 Teardown does not stop the shell. Run cleanup after a drive. Cleanup removes only scratch directories this harness created under `/tmp/paper-peek-verify`.
 
@@ -35,8 +35,8 @@ Run it from the plugin checkout. Exit 0 and a line `verdict: worth-driving` mean
 - `WAYLAND_DISPLAY` is set and that socket exists.
 - Exactly one `/run/user/$UID/omarchy-shell-*.sock` exists. Zero or several is a refusal.
 - `omarchy-shell shell ping` prints `ok`.
-- `~/.config/omarchy/plugins/fmchale.paper-peek` exists, is not a symlink, and `omarchy plugin validate` on that path exits 0.
-- `omarchy plugin list --json` includes `fmchale.paper-peek` with `enabled` true and kind `bar-widget`. For this plugin, `enabled` means the widget is in the bar. `active: false` is normal. `active` is for bar options, not bar widgets.
+- `~/.config/omarchy/plugins/binaryfever.paper-peek` exists, is not a symlink, and `omarchy plugin validate` on that path exits 0.
+- `omarchy plugin list --json` includes `binaryfever.paper-peek` with `enabled` true and kind `bar-widget`. For this plugin, `enabled` means the widget is in the bar. `active: false` is normal. `active` is for bar options, not bar widgets.
 - `omarchy-shell shell debugBarGeometry` includes the widget in section `left`, `visible` true, with a non-zero size.
 - `hyprctl monitors -j` reports one monitor at origin `0,0`. Any other layout is a refusal, because the screenshot crop uses the geometry coordinates directly and that offset was checked only for an origin of `0,0`.
 
@@ -53,7 +53,7 @@ The harness is `verify-paper-peek`. The only mapped drive is the bar label.
 The command runs doctor again. If doctor fails, it writes the refusal under the evidence directory and exits 1 without calling `grim`. If doctor passes, it:
 
 1. Records tiled window positions from `hyprctl clients -j` (`floating != true`).
-2. Records `debugBarGeometry` and the `fmchale.paper-peek` slot.
+2. Records `debugBarGeometry` and the `binaryfever.paper-peek` slot.
 3. Crops the slot with `grim -g`. The crop is the slot in logical pixels, 8px to the left when the slot allows it, 24px past the slot's right edge, and 8px below the slot. Those coordinates are what `grim` expects. The PNG is in physical pixels (scale 1.6 on this monitor). Do not multiply the crop by the scale.
 4. Reads the crop with `tesseract <png> stdout --psm 7`.
 5. Records tiled window positions again. `diff` must be empty.
@@ -73,7 +73,7 @@ Override the root with `XDG_STATE_HOME` (`$XDG_STATE_HOME/paper-peek/verify-evid
 Stdout names the directory with `evidence:`. A pass writes:
 
 - `doctor.txt` — doctor output, including `verdict: worth-driving`
-- `plugin.json` — the list entry for `fmchale.paper-peek`
+- `plugin.json` — the list entry for `binaryfever.paper-peek`
 - `geometry.json` — full bar geometry at capture time
 - `widget.json` — the Paper Peek slot (`section` `left`, `visible` true)
 - `crop.txt` — the `grim -g` argument

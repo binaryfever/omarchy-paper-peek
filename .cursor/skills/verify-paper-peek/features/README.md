@@ -5,8 +5,8 @@ This directory is the maintained source for verifying the user-facing behavior o
 ## Baseline preconditions
 
 - The live Omarchy shell on this Wayland display is the only instance. Do not start or restart `omarchy-shell`.
-- The plugin checkout is the real directory `~/.config/omarchy/plugins/fmchale.paper-peek`, not a symlink.
-- `fmchale.paper-peek` is already on the left of the top bar. If it is not, the drive fails. Do not enable it to make the drive pass.
+- The plugin checkout is the real directory `~/.config/omarchy/plugins/binaryfever.paper-peek`, not a symlink.
+- `binaryfever.paper-peek` is already on the left of the top bar. If it is not, the drive fails. Do not enable it to make the drive pass.
 - One monitor, at origin `0,0`.
 - Run `.cursor/skills/verify-paper-peek/verify-paper-peek doctor` and require `verdict: worth-driving`.
 - Never drive a shell socket this run did not identify. Doctor refuses when it finds zero or several `omarchy-shell-*.sock` files.
