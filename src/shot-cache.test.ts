@@ -3,7 +3,7 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { memoryText, type ArtboardPlace, type PeekMemory } from "./peek-memory.ts"
-import { readShotStamp, shotJpegPath, sidecarNote, storeShot } from "./shot-cache.ts"
+import { readShotScale, readShotStamp, shotJpegPath, sidecarNote, storeShot } from "./shot-cache.ts"
 
 const JPEG = Uint8Array.of(0xff, 0xd8, 0xff, 0xd9)
 
@@ -78,6 +78,7 @@ async function putShot(cacheDir: string, fileId: string, nodeId: string): Promis
     name: null,
     page: "page-1",
     updatedAt: null,
+    scale: 2,
   })
 }
 
@@ -130,8 +131,16 @@ async function runTests(): Promise<void> {
       name: "Board",
       page: "page-1",
       updatedAt: 42,
+      scale: 2,
     })
     assert((await readShotStamp(readCache, "file-read", "node-read")) === 42, "the sidecar keeps Paper's stamp")
+    assert((await readShotScale(readCache, "file-read", "node-read")) === 2, "the sidecar keeps the scale asked for")
+    // Every shot cached before this field existed has to be refetched once,
+    // and a sidecar with no scale is the only way to tell one from a new shot.
+    assert((await readShotScale(readCache, "file-none", "node-none")) === null, "no sidecar has no scale")
+    const oldCache = join(root, "old")
+    await plantPair(oldCache, "file-old", "node-old", JPEG.byteLength, new Date().toISOString())
+    assert((await readShotScale(oldCache, "file-old", "node-old")) === 1, "a sidecar written before the field reads as 1")
     assert(
       (await sidecarNote(readCache, "file-read", "node-read", JPEG.byteLength)) === "hello",
       "the note matches the jpeg length",

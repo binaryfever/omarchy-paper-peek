@@ -9,6 +9,30 @@ Width and height are the JPEG frame header in
 docs/paper-mcp-samples/nothing-selected/screenshot.jpg.
 The tool JSON has neither field.
 
+### Scale
+
+`get_screenshot` takes an optional numeric `scale`. The tool's own description
+calls 1 the default, "sufficient for verifying layout", and 2 the setting for
+"reading small text or inspecting fine details". The plugin asks for 2 on
+`shot`, and leaves the width-measuring call in `artboards` at 1, where the
+number Paper answers is the artboard's own width.
+
+Paper caps the result whatever the scale. Measured against file
+01M3FYEHC2WZ9YC2DC3AJMX995 on 10 November 2026:
+
+| artboard | scale 1 | scale 2 |
+| --- | --- | --- |
+| 390 x 664 | 390x664, 60509 bytes | 780x1328, 170788 bytes |
+| 1440 x 900 | 1440x900, 160145 bytes | 2000x1250, 285485 bytes |
+
+The cap is 2000 pixels on the long edge. The 1440 artboard asked for at 2 came
+back at 2000x1250, which is 1.39x, with the extra text block "Note: Image was
+resized to 2000x1250px to fit size limits." The call still returns a JPEG, so a
+capped artboard stores normally.
+
+Because of that cap the scale a shot was asked for and the scale it got are
+different numbers. The sidecar records the one that was asked for.
+
 ## Nothing selected
 
 get_selection payload:
@@ -47,13 +71,13 @@ Commands:
 
 `artboards/<fileId>/<pageId>.json` has `fileId`, `pageId`, and `artboards`. Each artboard has `id`, `name`, and `width`. `width` is the `get_basic_info` number when Paper measured it. When that number is missing, the command calls `get_screenshot` and stores the JPEG width.
 
-`shots/<fileId>/<nodeId>.jpg` is the JPEG. The sibling `.json` has `name`, `file`, `page`, `timestamp`, `note`, and `byteLength`. When `list_resources` includes a numeric `updatedAt` for that file, the sidecar also stores `updatedAt`. `name` and `page` come from the artboard cache for that file. They are null when that cache has no matching node. Node ids such as `1-0` repeat across files, so the directory is the file id.
+`shots/<fileId>/<nodeId>.jpg` is the JPEG. The sibling `.json` has `name`, `file`, `page`, `timestamp`, `note`, `byteLength`, and `scale`. `scale` is the number passed to `get_screenshot`, not the scale Paper delivered after its cap. A sidecar written before that field existed has no `scale`, and reads as 1. When `list_resources` includes a numeric `updatedAt` for that file, the sidecar also stores `updatedAt`. `name` and `page` come from the artboard cache for that file. They are null when that cache has no matching node. Node ids such as `1-0` repeat across files, so the directory is the file id.
 
 `pages` and `artboards` read the cache when the file is present and `--refresh` is absent. That read does not call Paper. `--refresh`, or a missing cache file, calls `get_basic_info` with the file id. `artboards` also passes the page id. A second run without `--refresh` does not call Paper.
 
 `get_screenshot` runs for `shot` only when `list_resources` marks that file open. A closed file does not open a tab. When a JPEG is already stored, that command exits 0 and leaves the file in place. With no JPEG, it exits 2 and stderr is `file-closed`. A fresh JPEG appends `fetch <fileId> <nodeId>` to `~/.local/state/paper-peek/refresh.log`. `PAPER_PEEK_LOG` overrides that file.
 
-`watch` calls `list_resources` and does not call `get_screenshot`. It does not write `projects.json`. It prints one word and exits 0. `changed` means the file is open and its `updatedAt` differs from the number stored on the shot sidecar, including when the sidecar has no number yet. `unchanged` means the number matches, the file is closed, or Paper sent no `updatedAt`. `down` means Paper did not answer. Each run appends `check <fileId> <nodeId> <word>` to the same log.
+`watch` calls `list_resources` and does not call `get_screenshot`. It does not write `projects.json`. It prints one word and exits 0. `changed` means the file is open and its `updatedAt` differs from the number stored on the shot sidecar, including when the sidecar has no number yet. It also means the file is open and the sidecar's `scale` is below the 2 the plugin now asks for, so an artboard cached at 1x is replaced once without anyone editing it in Paper. The replacement records `scale` 2 and the check goes quiet again. `unchanged` means the number matches, the file is closed, or Paper sent no `updatedAt`. `down` means Paper did not answer. Each run appends `check <fileId> <nodeId> <word>` to the same log.
 
 Exit codes:
 

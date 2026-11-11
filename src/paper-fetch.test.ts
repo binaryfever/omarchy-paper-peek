@@ -136,6 +136,7 @@ async function runTests(): Promise<void> {
     let shots = 0
     let seenFile = ""
     let seenNode = ""
+    let seenScale = 0
     let open = true
     const source = scriptedPaper({
       cacheDir: dir,
@@ -144,6 +145,7 @@ async function runTests(): Promise<void> {
         shots += 1
         seenFile = asked.fileId
         seenNode = asked.nodeId
+        seenScale = asked.scale
         return shotPayload(jpeg, NOTE)
       },
     })
@@ -157,6 +159,9 @@ async function runTests(): Promise<void> {
       "path includes the file id and the node id",
     )
     assert(seenFile === FILE && seenNode === NODE, "screenshot request uses the file id and node id")
+    // The big view draws this several times larger than the drawer does, and
+    // one fetch has to serve both.
+    assert(seenScale === 2, "a shot is asked for at twice the artboard's size")
     const bytes = await readFile(first.image.imagePath)
     assert(bytes[0] === 0xff && bytes[1] === 0xd8, "stored file is a JPEG")
     assert(shots === 1, "one screenshot call for the open file")
@@ -268,6 +273,7 @@ async function runTests(): Promise<void> {
     const catalogDir = await scratchDir("paper-fetch-catalog-")
     let infoCalls = 0
     let widthShots = 0
+    const widthScales: number[] = []
     const catalog = scriptedPaper({
       cacheDir: catalogDir,
       listResources: () => listPayload(true, "01M3FSZV4GNV5WV4WPRBS76WRB"),
@@ -290,8 +296,9 @@ async function runTests(): Promise<void> {
           ],
         })
       },
-      screenshot: () => {
+      screenshot: (asked) => {
         widthShots += 1
+        widthScales.push(asked.scale)
         return shotPayload(jpeg, null)
       },
     })
@@ -351,6 +358,9 @@ async function runTests(): Promise<void> {
       assert(boards.catalog.artboards[1]?.width === 2160, "a measured width stays the Paper width")
     }
     assert(widthShots === 1, "only the unmeasured artboard is screenshotted")
+    // Measuring asks a different question from drawing: it wants the
+    // artboard's own width, which is the number Paper answers at 1.
+    assert(widthScales[0] === 1, "the measuring call stays at the artboard's own size")
     const boardsAgain = await listArtboards(catalog, target.fileId, pageId, false)
     assert(boardsAgain.kind === "cached" && widthShots === 1 && infoCalls === 3, "a second artboard read does not call Paper")
 
@@ -358,9 +368,10 @@ async function runTests(): Promise<void> {
     assert(shot.kind === "fresh", "an open file still screenshots")
     const sidecar = JSON.parse(
       await readFile(join(catalogDir, "shots", FILE, `${NODE}.json`), "utf8"),
-    ) as { name: string; file: string; page: string; timestamp: string }
+    ) as { name: string; file: string; page: string; timestamp: string; scale: number }
     assert(sidecar.name === "Tokens" && sidecar.file === FILE && sidecar.page === "p-3-0", "the shot record names the cached artboard")
     assert(Number.isFinite(Date.parse(sidecar.timestamp)), "the shot record has a timestamp")
+    assert(sidecar.scale === 2, "the shot record says what scale was asked for")
 
     const withFolder = await listProjects(catalog)
     assert(withFolder.kind === "fresh", "projects lists the scripted file")
@@ -482,6 +493,60 @@ async function runTests(): Promise<void> {
       (await readFile(watchLog, "utf8")).trim().endsWith(`check ${FILE} ${NODE} changed`),
       "a moved stamp is logged as changed",
     )
+    // Every artboard cached before the plugin asked for 2x is soft in the big
+    // view, and its file has not been touched, so Paper reports nothing. The
+    // scale on the sidecar is the only thing that can get it replaced, and it
+    // has to settle after one refetch rather than fetching on every check.
+    const staleDir = await scratchDir("paper-fetch-stale-")
+    process.env.PAPER_PEEK_LOG = join(staleDir, "refresh.log")
+    const staleStamp = 1790658894999
+    let staleShots = 0
+    const staleShotDir = join(staleDir, "shots", FILE)
+    await mkdir(staleShotDir, { recursive: true })
+    await writeFile(join(staleShotDir, `${NODE}.jpg`), jpeg)
+    await writeFile(
+      join(staleShotDir, `${NODE}.json`),
+      JSON.stringify({
+        name: "Tokens",
+        file: FILE,
+        page: "p-3-0",
+        timestamp: new Date().toISOString(),
+        note: null,
+        byteLength: jpeg.byteLength,
+        scale: 1,
+        updatedAt: staleStamp,
+      }),
+    )
+    const stale = scriptedPaper({
+      cacheDir: staleDir,
+      listResources: () => listPayload(true, undefined, staleStamp),
+      screenshot: () => {
+        staleShots += 1
+        return shotPayload(jpeg, null)
+      },
+    })
+    const staleCheck = await run(["watch", FILE, NODE], stale)
+    assert(staleCheck === 0, "a check over a 1x shot exits 0")
+    assert(
+      (await readFile(join(staleDir, "refresh.log"), "utf8")).trim().endsWith(`check ${FILE} ${NODE} changed`),
+      "a shot cached at 1x is changed even though the file stamp matches",
+    )
+    assert(staleShots === 0, "the check itself does not fetch")
+    const staleFetch = await run(["shot", FILE, NODE], stale)
+    assert(staleFetch === 0 && staleShots === 1, "the refetch happens once")
+    const staleSidecar = JSON.parse(
+      await readFile(join(staleShotDir, `${NODE}.json`), "utf8"),
+    ) as { scale: number; updatedAt?: number }
+    assert(staleSidecar.scale === 2, "the replacement records the scale it was asked for")
+    assert(staleSidecar.updatedAt === staleStamp, "and keeps the file stamp it was fetched against")
+    const staleSettled = await run(["watch", FILE, NODE], stale)
+    assert(staleSettled === 0 && staleShots === 1, "the same shot is not fetched a second time")
+    assert(
+      (await readFile(join(staleDir, "refresh.log"), "utf8")).trim().endsWith(`check ${FILE} ${NODE} unchanged`),
+      "once replaced the shot reads as current",
+    )
+    process.env.PAPER_PEEK_LOG = watchLog
+
     const closedWatch = scriptedPaper({
       cacheDir: watchDir,
       listResources: () => listPayload(false, undefined, stamp + 5),

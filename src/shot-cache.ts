@@ -22,6 +22,7 @@ type StoreShot = {
   readonly name: string | null
   readonly page: string | null
   readonly updatedAt: number | null
+  readonly scale: number
 }
 
 type Protection =
@@ -62,6 +63,12 @@ type ShotSidecar = {
   timestamp: string
   note: string | null
   byteLength: number
+  // The scale that was asked of Paper, not the one it delivered. Paper caps a
+  // shot's long edge, so a wide artboard asked for at 2 comes back at less
+  // than twice its size. Recording the request is what lets a stale shot be
+  // spotted once and then settle; recording the delivered size would leave
+  // every capped artboard looking stale forever.
+  scale: number
   updatedAt?: number
 }
 
@@ -105,6 +112,15 @@ export async function readShotStamp(cacheDir: string, fileId: string, nodeId: st
   return parsed.updatedAt
 }
 
+// A shot stored before the plugin asked for a bigger one has no scale on its
+// sidecar at all, so a missing field reads as 1 rather than as unknown.
+export async function readShotScale(cacheDir: string, fileId: string, nodeId: string): Promise<number | null> {
+  const parsed = await readSidecarRecord(cacheDir, fileId, nodeId)
+  if (parsed === null) return null
+  if (typeof parsed.scale !== "number" || !Number.isFinite(parsed.scale) || parsed.scale <= 0) return 1
+  return parsed.scale
+}
+
 export async function sidecarNote(
   cacheDir: string,
   fileId: string,
@@ -133,6 +149,7 @@ function shotRecord(input: StoreShot): ShotSidecar {
     timestamp: new Date().toISOString(),
     note: input.note,
     byteLength: input.bytes.byteLength,
+    scale: input.scale,
   }
   if (input.updatedAt === null) return record
   return { ...record, updatedAt: input.updatedAt }
