@@ -64,7 +64,7 @@ async function runTests(): Promise<void> {
   }
 
   assert(isTextPath("README.md"), "markdown is read as text")
-  assert(!isTextPath("docs/drawer.png"), "a screenshot is not read as text")
+  assert(!isTextPath("preview.png"), "a screenshot is not read as text")
 
   // Reference forms.
   assert(
@@ -96,7 +96,7 @@ async function runTests(): Promise<void> {
     "the absolute plugin path the drawer builds is a reference",
   )
   assert(
-    referencedPaths("![shot](docs/drawer.png)\n", "README.md").join() === "docs/drawer.png",
+    referencedPaths("![shot](preview.png)\n", "README.md").join() === "preview.png",
     "a relative markdown link is a reference",
   )
   assert(
