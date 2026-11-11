@@ -38,7 +38,7 @@ The bar widget is a small artboard icon, coloured by state, and its tooltip name
 
 Click the icon to open the drawer. `SUPER + SHIFT + H` opens it, and the same chord closes it from anywhere, whatever has focus.
 
-The drawer slides in from the right, over your tiled windows. Nothing on the workspace moves: your windows keep their places and their sizes. The header is two lines, the artboard's name and then the project and page it came from. Under the shot, the same column lists that page's artboards, and a click loads one. The footer carries the same colour and word as the bar.
+The drawer slides in from the right, over your tiled windows and under the bar, so the icon that opened it stays where you can click it again. Nothing on the workspace moves: your windows keep their places and their sizes. The header is two lines, the artboard's name and then the project and page it came from. Under the shot, the same column lists that page's artboards, and a click loads one. The footer carries the same colour and word as the bar.
 
 Click the artboard, or the expand control in its top right corner, to open it at the size of the screen. A click anywhere brings the drawer back, on the same artboard, with the rows where you left them. Paper is not called for this, because the big view reads the JPEG already in the cache.
 

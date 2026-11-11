@@ -22,8 +22,10 @@ BarWidget {
     if (word === "live" || word === "not-live" || word === "off") root.peekStatus = word
   }
 
-  function openDrawer() {
-    IpcRegistry.call("binaryfever.paper-peek", "open", [])
+  // Toggle, not open: a second press on the icon that opened the drawer is the
+  // obvious way to close it, and the hotkey already works that way.
+  function toggleDrawer() {
+    IpcRegistry.call("binaryfever.paper-peek", "toggle", [])
   }
 
   FileView {
@@ -52,6 +54,6 @@ BarWidget {
     // does not load the drawer's layout module for them, so a test holds these
     // literals against statusWord to stop the two drifting apart.
     tooltipText: root.peekStatus === "live" ? "Connected" : (root.peekStatus === "not-live" ? "Not connected" : "No artboard")
-    onPressed: root.openDrawer()
+    onPressed: root.toggleDrawer()
   }
 }
