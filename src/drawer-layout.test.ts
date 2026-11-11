@@ -555,18 +555,23 @@ assert(
   "a helper that may not be run says something else",
 )
 
-// A status read from a file outlives the helper that wrote it, so "Live" would
-// otherwise sit in the footer under the line saying nothing can be checked.
+// A status read from a file outlives the helper that wrote it, so a stale
+// Connected would otherwise sit under the line saying nothing can be checked.
 assert(Layout.shownStatus("live", "") === "live", "a working helper is believed")
-assert(Layout.shownStatus("live", "no node") === "off", "a fault retires a stale Live")
-assert(Layout.shownStatus("not-live", "no node") === "off", "and a stale Not live too")
+assert(Layout.shownStatus("live", "no node") === "not-live", "a fault retires a stale Connected")
+assert(Layout.shownStatus("not-live", "no node") === "not-live", "and leaves Not connected standing")
+// off is the state for having picked nothing. A fault must not borrow it: an
+// artboard is picked and on screen, and only the connection is in doubt.
+assert(Layout.shownStatus("off", "no node") === "not-live", "a fault never reads as no artboard")
+assert(Layout.statusWord(Layout.shownStatus("live", "no node")) === "Not connected", "and the footer says so")
 
 assert(Layout.statusDot("live") === "accent", "live dot")
 assert(Layout.statusDot("not-live") === "urgent", "not-live dot")
 assert(Layout.statusDot("off") === "muted", "off dot")
-assert(Layout.statusWord("live") === "Live", "live word")
-assert(Layout.statusWord("not-live") === "Not live", "not-live word")
-assert(Layout.statusWord("off") === "Off", "off word")
+assert(Layout.statusWord("live") === "Connected", "live word")
+assert(Layout.statusWord("not-live") === "Not connected", "not-live word")
+assert(Layout.statusWord("off") === "No artboard", "off word")
+assert(Layout.statusWord("nonsense") === "No artboard", "an unknown token falls back to no artboard")
 assert(Layout.showEmpty("projects", [], "", "") === true, "empty projects")
 assert(Layout.showEmpty("shot", [], "", "") === false, "shot never empty via slots")
 assert(Layout.showEmpty("projects", [], "x", "") === false, "pending blocks empty")
@@ -651,6 +656,21 @@ const drawerSource = readFileSync(join(repoRoot, "Drawer.qml"), "utf8")
 const barSource = readFileSync(join(repoRoot, "BarWidget.qml"), "utf8")
 
 assert(!barSource.includes("drawer-layout"), "BarWidget does not contain drawer-layout")
+// Which is why the bar repeats the three words rather than calling for them.
+// Holding its literals against statusWord is what stops the bar and the
+// drawer drifting into two names for one state.
+for (const token of ["live", "not-live", "off"]) {
+  assert(
+    barSource.includes(`"${Layout.statusWord(token)}"`),
+    `the bar's tooltip uses the footer's word for ${token}`,
+  )
+}
+// The words are display text. The tokens behind them are an interface the
+// status IPC call hands out, and they do not move.
+assert(
+  drawerSource.includes("return root.shownStatus"),
+  "the status call still answers with a token, not a word",
+)
 assert(countNeedle(drawerSource, "ListView {") === 1, "Drawer contains one ListView")
 assert(!drawerSource.includes("Flickable {"), "Drawer contains no Flickable")
 

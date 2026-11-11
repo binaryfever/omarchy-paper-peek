@@ -642,11 +642,15 @@ function helperFault(exitCode) {
 
 // The status word is read from a file the helper writes, so it is only ever as
 // current as the last run that worked. A helper that will not run leaves that
-// file standing, and "Live" then sits in the footer directly under the line
-// saying nothing can be checked. The drawer does not know what Paper is doing,
-// and the honest answer to that is the one it already has for not knowing.
+// file standing, and a stale "Connected" then sits in the footer directly
+// under the line saying nothing can be checked.
+//
+// A helper that will not run is a drawer that cannot reach Paper, so the fault
+// lands on not-live. It must not land on off: an artboard is picked and on
+// screen, and off is the state for having picked nothing. The reason itself is
+// on the notice line above, so the footer does not have to carry it.
 function shownStatus(status, fault) {
-  return fault === "" ? status : "off"
+  return fault === "" ? status : "not-live"
 }
 
 function statusDot(status) {
@@ -659,14 +663,18 @@ function statusDot(status) {
   return "muted"
 }
 
+// Three states, three kinds of fact. Two are about whether Paper answered and
+// one is about whether anything has been picked to look at, so they do not
+// share a vocabulary. Nothing says "Paper": the panel is Paper Peek and the
+// header above already names the file.
 function statusWord(status) {
   if (status === "live") {
-    return "Live"
+    return "Connected"
   }
   if (status === "not-live") {
-    return "Not live"
+    return "Not connected"
   }
-  return "Off"
+  return "No artboard"
 }
 
 function showEmpty(view, slots, pending, notice) {
