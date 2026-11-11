@@ -2,7 +2,7 @@
 
 [Paper](https://paper.design) is a design tool for interfaces, and its desktop app keeps your projects on this machine. Paper Peek shows an artboard from those projects beside your code. A hotkey slides a drawer in over your tiled windows, and the same hotkey hides it. Inside the drawer you browse project, page and artboard, and it reopens on the last artboard you were looking at. No links to paste, and no trip to Paper.
 
-![The drawer open on an artboard](preview.png)
+<img src="preview.png" alt="The drawer open on an artboard" width="320">
 
 ## Requirements
 
@@ -24,27 +24,27 @@ The command clones the repository, validates `manifest.json`, and enables the pl
 omarchy plugin enable binaryfever.paper-peek
 ```
 
-The dot's default place is the left of the bar. The plugin id is `binaryfever.paper-peek`.
+The icon's default place is the right of the bar, among the other status icons. The plugin id is `binaryfever.paper-peek`.
 
 ## Usage
 
-The bar widget is a dot, and its tooltip names the state.
+The bar widget is a small artboard icon, coloured by state, and its tooltip names the state.
 
-| Dot | Tooltip | What it means |
+| Colour | Tooltip | What it means |
 | --- | --- | --- |
 | Theme accent | Connected | An artboard is picked, and Paper answered |
 | Urgent | Not connected | Paper did not answer, or the helper could not run |
 | Muted | No artboard | Nothing is picked yet |
 
-Click the dot to open the drawer. `SUPER + SHIFT + H` opens it, and the same chord closes it from anywhere, whatever has focus.
+Click the icon to open the drawer. `SUPER + SHIFT + H` opens it, and the same chord closes it from anywhere, whatever has focus.
 
-The drawer slides in from the right, over your tiled windows. Nothing on the workspace moves: your windows keep their places and their sizes. The header is two lines, the artboard's name and then the project and page it came from. Under the shot, the same column lists that page's artboards, and a click loads one. The footer carries the same dot and word as the bar.
+The drawer slides in from the right, over your tiled windows and under the bar, so the icon that opened it stays where you can click it again. Nothing on the workspace moves: your windows keep their places and their sizes. The header is two lines, the artboard's name and then the project and page it came from. Under the shot, the same column lists that page's artboards, and a click loads one. The footer carries the same colour and word as the bar.
 
 Click the artboard, or the expand control in its top right corner, to open it at the size of the screen. A click anywhere brings the drawer back, on the same artboard, with the rows where you left them. Paper is not called for this, because the big view reads the JPEG already in the cache.
 
 Browse opens the project list, then a project's pages, then a page's artboards. Paper Peek asks Paper for a project's pages the first time you open it and serves its cache after that, so browsing does not pile up tabs in Paper.
 
-While the drawer is open, Paper Peek checks Paper on a timer and fetches a new screenshot only when Paper reports that the file changed. A closed drawer checks at a fifteenth of that rate, because only the bar's dot is reading it.
+While the drawer is open, Paper Peek checks Paper on a timer and fetches a new screenshot only when Paper reports that the file changed. A closed drawer checks at a fifteenth of that rate, because only the bar's icon is reading it.
 
 ### Dock mode
 
@@ -107,7 +107,7 @@ Change Paper Peek in `~/.config/paper-peek/settings.json`. With no file, Paper P
 | --- | --- |
 | `~/.config/paper-peek/` | Your `settings.json`. Paper Peek creates the directory and only ever reads the file |
 | `~/.cache/paper-peek/` | The project, page and artboard lists, and the artboard screenshots, capped by `cacheBudgetMb` |
-| `~/.local/state/paper-peek/` | The artboard to reopen on, the word the bar's dot reads, and a log of the calls made to Paper |
+| `~/.local/state/paper-peek/` | The artboard to reopen on, the word the bar's icon reads, and a log of the calls made to Paper |
 
 Paper Peek binds its two chords at runtime with `hyprctl eval`. It does not edit `bindings.lua`, your Hyprland config, or any other file of yours, and with no settings file it leaves an existing `SUPER + SHIFT + H` bind alone. Nothing it writes lives outside the three directories above.
 
@@ -117,7 +117,7 @@ Paper Peek binds its two chords at runtime with `hyprctl eval`. It does not edit
 omarchy plugin remove binaryfever.paper-peek
 ```
 
-`omarchy plugin disable binaryfever.paper-peek` takes the dot off the bar and leaves the install in place. Removing the plugin leaves the three directories above as they are; delete them by hand if you want them gone.
+`omarchy plugin disable binaryfever.paper-peek` takes the icon off the bar and leaves the install in place. Removing the plugin leaves the three directories above as they are; delete them by hand if you want them gone.
 
 ## Where the code lives
 

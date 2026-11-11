@@ -41,7 +41,6 @@ export const PUBLISHED_PATHS: readonly string[] = [
   "src/peek-memory.ts",
   "src/settings.ts",
   "src/shot-cache.ts",
-  "theme-green.js",
 ]
 
 export interface Reference {
