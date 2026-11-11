@@ -3,7 +3,7 @@
 # Does not start, restart, enable, disable, or remove the shell or the plugin.
 set -euo pipefail
 
-plugin_id="fmchale.paper-peek"
+plugin_id="binaryfever.paper-peek"
 expected_label="Paper Peek"
 expected_section="left"
 plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/${plugin_id}"

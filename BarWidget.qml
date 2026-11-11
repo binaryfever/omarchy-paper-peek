@@ -8,7 +8,7 @@ import "theme-green.js" as ThemeGreen
 
 BarWidget {
   id: root
-  moduleName: "fmchale.paper-peek"
+  moduleName: "binaryfever.paper-peek"
 
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string statusPath: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/paper-peek/status"
@@ -38,7 +38,7 @@ BarWidget {
   }
 
   function openDrawer() {
-    IpcRegistry.call("fmchale.paper-peek", "open", [])
+    IpcRegistry.call("binaryfever.paper-peek", "open", [])
   }
 
   FileView {

@@ -25,7 +25,7 @@ omarchy plugin add https://github.com/binaryfever/omarchy-paper-peek
 The command clones the repository and validates `manifest.json`. Enable Paper Peek when the command asks. You can also enable it later.
 
 ```bash
-omarchy plugin enable fmchale.paper-peek
+omarchy plugin enable binaryfever.paper-peek
 ```
 
 The dot's default place is the left of the bar.
@@ -33,16 +33,16 @@ The dot's default place is the left of the bar.
 Remove the plugin with this command.
 
 ```bash
-omarchy plugin remove fmchale.paper-peek
+omarchy plugin remove binaryfever.paper-peek
 ```
 
-The plugin id is `fmchale.paper-peek`.
+The plugin id is `binaryfever.paper-peek`.
 
 ## Hotkeys
 
-`SUPER + SHIFT + H` toggles the peek. The hotkey runs `omarchy-shell fmchale.paper-peek toggle`.
+`SUPER + SHIFT + H` toggles the peek. The hotkey runs `omarchy-shell binaryfever.paper-peek toggle`.
 
-`browserHotkey` is empty until you set it. An empty value adds no hotkey. A set value runs `omarchy-shell fmchale.paper-peek browser`.
+`browserHotkey` is empty until you set it. An empty value adds no hotkey. A set value runs `omarchy-shell binaryfever.paper-peek browser`.
 
 While the drawer shows the artboard, Space opens it at the size of the screen. Escape closes the drawer. Return opens the project browser.
 
@@ -50,7 +50,7 @@ The open drawer does not hold your keyboard. It takes the keys when it opens, so
 
 While the artboard fills the screen, a click anywhere closes it, and so do Escape and Space. The drawer comes back on the same artboard, with the rows where you left them. Paper is not called, because the big view reads the JPEG already in the cache.
 
-`omarchy-shell fmchale.paper-peek zoom` opens the artboard at the size of the screen, and closes it again. Bind that command to a key of your own if you want the big view without the drawer's.
+`omarchy-shell binaryfever.paper-peek zoom` opens the artboard at the size of the screen, and closes it again. Bind that command to a key of your own if you want the big view without the drawer's.
 
 ## Settings
 
