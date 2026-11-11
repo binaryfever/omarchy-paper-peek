@@ -74,7 +74,10 @@ BarWidget {
     text: ""
     labelVisible: false
     hasVisualContent: true
-    tooltipText: root.peekStatus === "live" ? "Live" : (root.peekStatus === "not-live" ? "Not live" : "Off")
+    // The same three words the drawer's footer draws. The bar deliberately
+    // does not load the drawer's layout module for them, so a test holds these
+    // literals against statusWord to stop the two drifting apart.
+    tooltipText: root.peekStatus === "live" ? "Connected" : (root.peekStatus === "not-live" ? "Not connected" : "No artboard")
     onPressed: root.openDrawer()
 
     // The same dot the drawer's status line draws, built the same way: two of
