@@ -19,7 +19,7 @@ Paper Peek reads the open file. It does not open a file in Paper. A screenshot n
 Add the plugin from its git repository.
 
 ```bash
-omarchy plugin add https://github.com/binaryfever/omarchy-paper-peek
+omarchy plugin add https://github.com/binaryfever/paper-peek
 ```
 
 The command clones the repository and validates `manifest.json`. Enable Paper Peek when the command asks. You can also enable it later.
@@ -37,6 +37,8 @@ omarchy plugin remove binaryfever.paper-peek
 ```
 
 The plugin id is `binaryfever.paper-peek`.
+
+Paper Peek is published from [binaryfever/paper-peek](https://github.com/binaryfever/paper-peek), which carries only the files an install needs. The work lives in [binaryfever/omarchy-paper-peek](https://github.com/binaryfever/omarchy-paper-peek): the decision records, the notes on Paper's MCP server, and the tests.
 
 ## Hotkeys
 

@@ -23,11 +23,13 @@ Never edit Omarchy's own files under ~/.local/share/omarchy/. Reading them to le
 Don't change existing keybindings. Check `omarchy menu keybindings --print` before adding one. Paper Peek's toggle and browser chords are the exception, and they come from the settings file. The plugin binds those two chords with `hyprctl eval`. It does not edit `bindings.lua`. With no settings file it leaves the existing Super+Shift+H toggle bind untouched.
 Paper can be closed. Every code path must handle Paper being unreachable, or an artboard having been deleted, without crashing, and keep showing the last cached image.
 Keep the shell light. Plugins run inside the long-lived omarchy-shell process. No busy loops. The status word is polled on a timer. Artboard change checks run only while the drawer is open, and only a changed `updatedAt` from `list_resources` fetches a new screenshot.
+Ship what the shell reads. A new runtime file goes in `PUBLISHED_PATHS` in src/publish.ts, or the install that needs it will not have it. Dev-only files stay out of the published repo.
 Record decisions in docs/decisions/NNN-short-title.md with what was chosen and why.
 Repo layout
 manifest.json          plugin manifest (id, name, version, kinds, entryPoints)
 *.qml                  plugin UI and logic
-scripts/               helper scripts (paper-probe for testing, paper-fetch for real data)
+scripts/               helper scripts (paper-fetch for real data, paper-probe for testing, publish to ship the thin repo)
+src/                   TypeScript modules and their *.test.ts tests
 docs/paper-mcp.md      what Paper's MCP returns, exit codes, connection notes
 docs/paper-mcp-samples/  saved raw responses from Paper
 docs/decisions/        decision records
@@ -58,6 +60,16 @@ Window layout checks: hyprctl clients (tiled windows must not move when the draw
 Paper checks: scripts/paper-probe (once it exists) lists Paper's tools and runs the read calls.
 
 Then check each item under the issue's "Done means" and confirm nothing listed under "Keep" broke.
+
+Publishing
+
+Two repos. binaryfever/omarchy-paper-peek is this checkout's remote and carries everything: the decision records and their mockups, the saved Paper responses, AGENTS.md and the tests. binaryfever/paper-peek is what users install, and carries only the files the shell reads, about 390K against 5.6M. The README's install command names the thin one.
+
+The published list is `PUBLISHED_PATHS` in src/publish.ts. src/publish.test.ts fails on a file under src/ that is neither published nor named dev-only, and on a published file naming a path that is not published.
+
+scripts/publish stages that list into ~/.cache/paper-peek-publish, runs that same check on the stage, runs omarchy plugin validate on it, then makes one commit per manifest version and tags it v<version>. It pushes only with --push. Bump version in manifest.json before publishing a change, because the script refuses to move a tag that already exists.
+
+The repo name does not have to match the plugin id. omarchy-plugin-add clones to a staging directory, validates it, reads .id out of manifest.json and moves the clone to ~/.config/omarchy/plugins/<id>, so a repo named paper-peek still installs as binaryfever.paper-peek.
 
 Commits
 One issue per branch. Use Linear's branch name for the issue (for example fredmchale/fmc-664-inspect-papers-mcp-output).
