@@ -19,7 +19,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { commitFile } from "./durable-file.ts"
-import { readShotStamp, shotJpegPath, sidecarNote, storeShot } from "./shot-cache.ts"
+import { readShotScale, readShotStamp, shotJpegPath, sidecarNote, storeShot } from "./shot-cache.ts"
 import { configuredPaperUrl, ensureSettingsDir, installHotkeys, loadSettings, settingsPayload } from "./settings.ts"
 
 declare const fileIdBrand: unique symbol
@@ -30,6 +30,15 @@ const paperSourceBrand = Symbol("paper-source")
 
 const ID_TEXT = /^[A-Za-z0-9_-]+$/
 const PLUGIN_TOOLS = ["list_resources", "get_basic_info", "get_screenshot"] as const
+
+// Paper renders a shot at the artboard's own size. The drawer draws it small,
+// where that is plenty, and the big view draws it several times larger, where
+// it is soft. One fetch serves both views, so a shot is asked for at 2 and
+// the drawer decodes it at whatever width it is drawing.
+const SHOT_SCALE = 2
+// The width-measuring call is a different question: it wants the artboard's
+// own width, which is what Paper answers at 1.
+const MEASURE_SCALE = 1
 
 type PluginTool = (typeof PLUGIN_TOOLS)[number]
 
@@ -122,7 +131,11 @@ export type LivePaperOptions = {
 export type PaperScript = {
   readonly cacheDir: string
   readonly listResources: () => unknown
-  readonly screenshot?: (target: { readonly fileId: string; readonly nodeId: string }) => unknown
+  readonly screenshot?: (target: {
+    readonly fileId: string
+    readonly nodeId: string
+    readonly scale: number
+  }) => unknown
   readonly basicInfo?: (target: { readonly fileId: string; readonly pageId?: string }) => unknown
 }
 
@@ -285,7 +298,7 @@ export async function fetchArtboard(
   const gate = decideShot({ kind: "fresh", index: loaded.index }, target)
   if (gate.kind === "refuse") return storedShot(source, target, gate.reason)
   try {
-    const raw = await postTool(source, "get_screenshot", target)
+    const raw = await postTool(source, "get_screenshot", target, SHOT_SCALE)
     const frame = jpegFromToolResult(raw)
     if (frame instanceof Fail) return storedShot(source, target, frame.reason)
     const cacheDir = cacheDirOf(source)
@@ -299,6 +312,7 @@ export async function fetchArtboard(
       name: placed === null ? null : placed.name,
       page: placed === null ? null : placed.page,
       updatedAt: fileUpdatedAt(loaded.raw, target.fileId),
+      scale: SHOT_SCALE,
     })
     const stored = await readArtboard(source, target)
     if (stored.kind !== "cached") return { kind: "unavailable", reason: "bad-image" }
@@ -317,6 +331,13 @@ export async function watchArtboard(
   if (loaded instanceof Fail) return { kind: "down" }
   const gate = decideShot({ kind: "fresh", index: loaded.index }, target)
   if (gate.kind === "refuse") return { kind: "unchanged" }
+  // A shot cached before the plugin started asking for 2 is soft in the big
+  // view, and nothing about the file has changed for Paper to report. Only a
+  // check for the scale on the sidecar gets it replaced. The sidecar records
+  // what was asked for rather than what came back, so a capped artboard reads
+  // as current and this settles after one refetch instead of looping.
+  const scale = await readShotScale(cacheDirOf(source), target.fileId, target.nodeId)
+  if (scale !== null && scale < SHOT_SCALE) return { kind: "changed" }
   const stamp = fileUpdatedAt(loaded.raw, target.fileId)
   if (stamp === null) return { kind: "unchanged" }
   const seen = await readShotStamp(cacheDirOf(source), target.fileId, target.nodeId)
@@ -458,16 +479,17 @@ function isShotTarget(target: ArtboardTarget | BasicInfoRequest): target is Artb
 function toolArguments(
   name: PluginTool,
   target: ArtboardTarget | BasicInfoRequest | null,
+  scale: number,
 ):
   | { readonly limit: 200 }
-  | { readonly fileId: string; readonly nodeId: string }
+  | { readonly fileId: string; readonly nodeId: string; readonly scale: number }
   | { readonly fileId: string; readonly pageId?: string } {
   switch (name) {
     case "list_resources":
       return { limit: 200 }
     case "get_screenshot":
       if (target === null || !isShotTarget(target)) throw new Fail("bad-payload")
-      return { fileId: target.fileId, nodeId: target.nodeId }
+      return { fileId: target.fileId, nodeId: target.nodeId, scale }
     case "get_basic_info":
       if (target === null || isShotTarget(target)) throw new Fail("bad-payload")
       if (target.pageId !== undefined) return { fileId: target.fileId, pageId: target.pageId }
@@ -488,6 +510,7 @@ async function postTool(
   source: PaperSource,
   name: PluginTool,
   target: ArtboardTarget | BasicInfoRequest | null,
+  scale: number = MEASURE_SCALE,
 ): Promise<unknown> {
   const backend = backendOf(source)
   if (backend.kind === "script") {
@@ -501,7 +524,7 @@ async function postTool(
     if (target === null || !isShotTarget(target) || backend.script.screenshot === undefined) {
       throw new Fail("paper-down")
     }
-    return backend.script.screenshot({ fileId: target.fileId, nodeId: target.nodeId })
+    return backend.script.screenshot({ fileId: target.fileId, nodeId: target.nodeId, scale })
   }
   if (backend.sessionId === null) {
     await rpc(backend, "initialize", {
@@ -512,7 +535,7 @@ async function postTool(
   }
   return rpc(backend, "tools/call", {
     name,
-    arguments: toolArguments(name, target),
+    arguments: toolArguments(name, target, scale),
   })
 }
 
@@ -909,7 +932,12 @@ async function fillMissingWidths(
     }
     let raw: unknown
     try {
-      raw = await postTool(source, "get_screenshot", { fileId: catalog.fileId, nodeId: artboard.id })
+      raw = await postTool(
+        source,
+        "get_screenshot",
+        { fileId: catalog.fileId, nodeId: artboard.id },
+        MEASURE_SCALE,
+      )
     } catch (err) {
       if (err instanceof Fail && err.reason === "bad-payload") return err
       return new Fail("paper-down")
