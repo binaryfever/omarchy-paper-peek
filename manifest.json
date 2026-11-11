@@ -12,5 +12,11 @@
     "barWidget": "BarWidget.qml",
     "overlay": "Drawer.qml"
   },
-  "barWidget": { "defaultSection": "left" }
+  "barWidget": {
+    "displayName": "Paper Peek",
+    "description": "A dot that opens a drawer with the current Paper artboard in it, beside your code.",
+    "category": "Design",
+    "aliases": ["paper", "peek", "artboard", "design"],
+    "defaultSection": "left"
+  }
 }
