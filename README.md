@@ -28,7 +28,7 @@ The icon's default place is the right of the bar, among the other status icons. 
 
 ## Usage
 
-The bar widget is a small framed-picture icon, coloured by state, and its tooltip names the state.
+The bar widget is a small artboard icon, coloured by state, and its tooltip names the state.
 
 | Colour | Tooltip | What it means |
 | --- | --- | --- |

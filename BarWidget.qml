@@ -4,7 +4,6 @@ import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import "theme-green.js" as ThemeGreen
 
 BarWidget {
   id: root
@@ -14,20 +13,6 @@ BarWidget {
   readonly property string statusPath: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/paper-peek/status"
 
   property string peekStatus: "off"
-  property bool hasThemeGreen: false
-  property color themeGreen: Commons.Color.accent
-  readonly property color liveColor: hasThemeGreen ? themeGreen : Commons.Color.accent
-  readonly property string themeColorsPath: home + "/.local/state/omarchy/current/theme/colors.toml"
-
-  function applyThemeGreen(raw) {
-    var color = ThemeGreen.greenIn(raw)
-    if (color !== "") {
-      root.themeGreen = color
-      root.hasThemeGreen = true
-      return
-    }
-    root.hasThemeGreen = false
-  }
 
   implicitWidth: vertical ? barSize : Style.bar.iconSlot
   implicitHeight: vertical ? Style.bar.iconSlot : barSize
@@ -50,33 +35,18 @@ BarWidget {
     onFileChanged: reload()
   }
 
-  FileView {
-    id: themeColors
-    path: root.themeColorsPath
-    watchChanges: false
-    blockLoading: false
-    printErrors: false
-    onLoaded: root.applyThemeGreen(text())
-    onLoadFailed: root.applyThemeGreen("")
-  }
-
-  Connections {
-    target: Commons.Color
-    function onShellValuesChanged() {
-      themeColors.reload()
-    }
-  }
-
   WidgetButton {
     anchors.fill: parent
     bar: root.bar
     keepSpace: true
-    // The bar font's framed-picture glyph, nf-md-image-outline. An outline
-    // weight so it sits with the other status icons rather than shouting over
-    // them, and the colour carries the state the dot used to carry alone.
-    text: "󰥶"
+    // The bar font's artboard glyph, nf-md-vector-square: a frame with corner
+    // handles, which is what an artboard is drawn as everywhere else. Outline
+    // weight, so it sits with the other status icons rather than shouting over
+    // them. The three colours are the theme's own roles, the same three the
+    // drawer's footer dot draws.
+    text: "󰀁"
     foreground: root.peekStatus === "live"
-      ? root.liveColor
+      ? Commons.Color.accent
       : (root.peekStatus === "not-live" ? Commons.Color.urgent : Commons.Color.muted)
     // The same three words the drawer's footer draws. The bar deliberately
     // does not load the drawer's layout module for them, so a test holds these

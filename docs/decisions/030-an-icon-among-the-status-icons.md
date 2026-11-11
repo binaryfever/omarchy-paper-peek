@@ -1,9 +1,9 @@
 # An icon among the status icons
 
-The bar widget was a plain coloured circle and it defaulted to the `left`
-section, which put it next to the workspace numbers. Both are now changed: the
-circle is the bar font's framed-picture glyph, and the manifest defaults to
-`right`.
+The bar widget was a plain green circle and it defaulted to the `left`
+section, which put it next to the workspace numbers. All three are now changed:
+it is the bar font's artboard glyph, it takes its colours from the theme's own
+roles, and the manifest defaults to `right`.
 
 ## Left is for the workspaces
 
@@ -17,20 +17,33 @@ Worse than being out of convention, a bare green circle sitting immediately
 after the workspace numbers reads as another workspace. The left section is for
 the workspaces; nothing else should be mistakeable for one.
 
-## A glyph, still coloured
+## A frame, not a photograph
 
 `Ui/WidgetButton` draws a single private-use codepoint from the bar's own font
-as an icon, which is how every first-party icon on that bar is drawn. The glyph
-is `nf-md-image-outline`, U+F0976, present in JetBrainsMono Nerd Font, the
-family `monospace` resolves to here. Outline weight, so it carries the same
-visual weight as the bluetooth and wifi glyphs beside it rather than shouting
-over them.
+as an icon, which is how every first-party icon on that bar is drawn. Outline
+weight, so it carries the same visual weight as the bluetooth and wifi glyphs
+beside it rather than shouting over them.
 
-The three states did not change and neither did their colours: the glyph is
-tinted with the theme accent for Connected, urgent for Not connected and muted
-for No artboard, exactly as the circle was. The tooltip still names the state,
-and the drawer's own footer still draws the circle, because there it sits
-beside the word and is not competing with any icons.
+The first try was `nf-md-image-outline`, a framed picture, and it read as a
+photo viewer. An artboard is a canvas you lay a design out on, and the mark for
+that everywhere else is a frame with handles at its corners. The glyph is
+`nf-md-vector-square`, U+F0001, present in JetBrainsMono Nerd Font, the family
+`monospace` resolves to here.
+
+## The colours are roles, not a green
+
+The circle painted Connected with the theme's `green` key, which
+`docs/decisions/013-theme-colors.md` chose on the reasoning that urgent was
+already red and muted already grey. Following a palette is not the same as
+following a theme: `Commons.Color` keeps foreground, background, accent, urgent
+and muted, and `green` is not among them, so the bar had to read `colors.toml`
+itself to get one. That is a role the shell does not have.
+
+Connected now draws in `Commons.Color.accent`, Not connected in
+`Commons.Color.urgent`, No artboard in `Commons.Color.muted` — the same three
+roles the drawer's footer dot already drew, so the two cannot drift. The
+tooltip still names the state. `theme-green.js`, its test and its entry in
+`PUBLISHED_PATHS` are gone with the green.
 
 ## The tray is a choice, not the default
 
