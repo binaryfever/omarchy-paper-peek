@@ -29,8 +29,8 @@ BarWidget {
     root.hasThemeGreen = false
   }
 
-  implicitWidth: vertical ? barSize : Style.bar.statusSlot
-  implicitHeight: vertical ? Style.bar.statusSlot : barSize
+  implicitWidth: vertical ? barSize : Style.bar.iconSlot
+  implicitHeight: vertical ? Style.bar.iconSlot : barSize
 
   function applyStatus(text) {
     var word = String(text || "").trim()
@@ -71,24 +71,17 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     keepSpace: true
-    text: ""
-    labelVisible: false
-    hasVisualContent: true
+    // The bar font's framed-picture glyph, nf-md-image-outline. An outline
+    // weight so it sits with the other status icons rather than shouting over
+    // them, and the colour carries the state the dot used to carry alone.
+    text: "󰥶"
+    foreground: root.peekStatus === "live"
+      ? root.liveColor
+      : (root.peekStatus === "not-live" ? Commons.Color.urgent : Commons.Color.muted)
     // The same three words the drawer's footer draws. The bar deliberately
     // does not load the drawer's layout module for them, so a test holds these
     // literals against statusWord to stop the two drifting apart.
     tooltipText: root.peekStatus === "live" ? "Connected" : (root.peekStatus === "not-live" ? "Not connected" : "No artboard")
     onPressed: root.openDrawer()
-
-    // The same dot the drawer's status line draws, built the same way: two of
-    // the theme's small steps across, so a theme that scales its spacing
-    // scales the dot with it.
-    Rectangle {
-      width: Style.spacing.sm * 2
-      height: width
-      radius: height / 2
-      anchors.centerIn: parent
-      color: root.peekStatus === "live" ? root.liveColor : (root.peekStatus === "not-live" ? Commons.Color.urgent : Commons.Color.muted)
-    }
   }
 }
