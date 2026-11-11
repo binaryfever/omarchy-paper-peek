@@ -2,7 +2,7 @@
 
 [Paper](https://paper.design) is a design tool for interfaces, and its desktop app keeps your projects on this machine. Paper Peek shows an artboard from those projects beside your code. A hotkey slides a drawer in over your tiled windows, and the same hotkey hides it. Inside the drawer you browse project, page and artboard, and it reopens on the last artboard you were looking at. No links to paste, and no trip to Paper.
 
-![The drawer open on an artboard](preview.png)
+<img src="preview.png" alt="The drawer open on an artboard" width="320">
 
 ## Requirements
 
