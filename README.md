@@ -1,6 +1,6 @@
 # Paper Peek
 
-Paper Peek shows a Paper artboard beside your code. A hotkey slides a drawer in over your tiled windows, and the same hotkey hides it. Inside the drawer you browse project, page and artboard, and it reopens on the last artboard you were looking at. No links to paste, and no trip to Paper.
+[Paper](https://paper.design) is a design tool for interfaces, and its desktop app keeps your projects on this machine. Paper Peek shows an artboard from those projects beside your code. A hotkey slides a drawer in over your tiled windows, and the same hotkey hides it. Inside the drawer you browse project, page and artboard, and it reopens on the last artboard you were looking at. No links to paste, and no trip to Paper.
 
 ![The drawer open on an artboard](preview.png)
 
@@ -8,7 +8,7 @@ Paper Peek shows a Paper artboard beside your code. A hotkey slides a drawer in 
 
 **Omarchy 4.** Paper Peek is a plugin for the Omarchy shell and runs inside it.
 
-**Paper Desktop, running, with the file you want to see already open.** Paper Peek only reads. It never opens, selects or changes anything in Paper, and a screenshot needs the file to be open already.
+**[Paper Desktop](https://paper.design), running, with the file you want to see already open.** Paper Peek only reads. It never opens, selects or changes anything in Paper, and a screenshot needs the file to be open already.
 
 **Node 22.6 or newer on your path.** The helper that talks to Paper runs `node --experimental-strip-types`. With no Node, the drawer says so on its notice line and keeps showing the last artboard it cached.
 
