@@ -14,6 +14,9 @@ import {
   parseNodeId,
   parsePageId,
   peekStatus,
+  IMAGE_BYTES_MAX,
+  IMAGE_DATA_MAX,
+  NOTE_MAX,
   PAPER_REQUEST_DEADLINE_MS,
   REPLY_BYTE_CAP,
   readArtboard,
@@ -600,6 +603,7 @@ async function runTests(): Promise<void> {
     await rm(blindDir, { recursive: true, force: true })
     await deadlineTests(script, jpeg)
     await cappedReplyTests(script)
+    await boundShotTests(script, jpeg)
     await memoryTests()
   } finally {
     if (previousLog === undefined) delete process.env.PAPER_PEEK_LOG
@@ -1315,6 +1319,187 @@ async function cappedReplyTests(script: string): Promise<void> {
     assert(await jpegMissing(floodDir), "an open error body writes no JPEG")
   } finally {
     await floodPaper.close()
+  }
+}
+
+function paddedImageData(jpeg: Uint8Array, length: number): string {
+  const encoded = Buffer.from(jpeg).toString("base64")
+  assert(encoded.length <= length, "the JPEG base64 fits in the padded image string")
+  return encoded + "*".repeat(length - encoded.length)
+}
+
+async function sidecarMissing(cacheDir: string): Promise<boolean> {
+  try {
+    await readFile(join(cacheDir, "shots", FILE, `${NODE}.json`))
+    return false
+  } catch {
+    return true
+  }
+}
+
+async function boundShotTests(script: string, jpeg: Uint8Array): Promise<void> {
+  assert(NOTE.length === 58, "the fixture note is the resize sentence Paper sends")
+  assert(NOTE.length <= NOTE_MAX, "the fixture note sits inside the note bound")
+  assert(
+    Buffer.from(twoXJpeg()).toString("base64").length === 380648,
+    "the measured 2x JPEG is 380648 base64 characters",
+  )
+  assert(380648 <= IMAGE_DATA_MAX, "the measured 2x image string sits inside the character bound")
+  assert(TWO_X_JPEG_BYTES <= IMAGE_BYTES_MAX, "the measured 2x JPEG sits inside the byte bound")
+
+  const freshDir = await scratchDir("paper-fetch-bound-note-")
+  const fresh = await fetchArtboard(
+    scriptedPaper({
+      cacheDir: freshDir,
+      listResources: () => listPayload(true),
+      screenshot: () => shotPayload(jpeg, NOTE),
+    }),
+    ids(),
+  )
+  assert(fresh.kind === "fresh" && fresh.image.note === NOTE, "the fixture note still comes back on a fresh shot")
+  assert(fresh.image.width === 8 && fresh.image.height === 6, "size still comes from the JPEG frame")
+
+  const missingDir = await scratchDir("paper-fetch-bound-missing-")
+  const missing = await fetchArtboard(
+    scriptedPaper({
+      cacheDir: missingDir,
+      listResources: () => listPayload(true),
+      screenshot: () => ({ content: [{ type: "text", text: "no image" }] }),
+    }),
+    ids(),
+  )
+  assert(missing.kind === "unavailable" && missing.reason === "bad-image", "a missing image is still bad-image")
+  assert(await jpegMissing(missingDir), "a missing image writes no JPEG")
+
+  const overString = paddedImageData(jpeg, IMAGE_DATA_MAX + 1)
+  const overStringBody = `event: message\ndata: ${JSON.stringify({
+    jsonrpc: "2.0",
+    id: 3,
+    result: {
+      content: [
+        { type: "image", mimeType: "image/jpeg", data: overString },
+        { type: "text", text: NOTE },
+      ],
+    },
+  })}\n\n`
+  assert(
+    Buffer.byteLength(overStringBody) < REPLY_BYTE_CAP,
+    "an over-long image string still fits under the body cap",
+  )
+  const overStringDir = await scratchDir("paper-fetch-bound-string-")
+  const overStringShot = await fetchArtboard(
+    scriptedPaper({
+      cacheDir: overStringDir,
+      listResources: () => listPayload(true),
+      screenshot: () => ({
+        content: [
+          { type: "image", mimeType: "image/jpeg", data: overString },
+          { type: "text", text: NOTE },
+        ],
+      }),
+    }),
+    ids(),
+  )
+  assert(
+    overStringShot.kind === "unavailable" && overStringShot.reason === "bad-image",
+    "an over-long image string is bad-image",
+  )
+  assert(await jpegMissing(overStringDir), "an over-long image string writes no JPEG")
+  assert(await sidecarMissing(overStringDir), "an over-long image string writes no sidecar")
+
+  const atStringDir = await scratchDir("paper-fetch-bound-string-at-")
+  const atString = await fetchArtboard(
+    scriptedPaper({
+      cacheDir: atStringDir,
+      listResources: () => listPayload(true),
+      screenshot: () => ({
+        content: [
+          { type: "image", mimeType: "image/jpeg", data: paddedImageData(jpeg, IMAGE_DATA_MAX) },
+          { type: "text", text: NOTE },
+        ],
+      }),
+    }),
+    ids(),
+  )
+  assert(atString.kind === "fresh" && atString.image.note === NOTE, "an image string at the bound still stores")
+
+  const heavy = new Uint8Array(IMAGE_BYTES_MAX + 1)
+  heavy.set(jpeg)
+  const heavyEncoded = Buffer.from(heavy).toString("base64")
+  assert(heavyEncoded.length <= IMAGE_DATA_MAX, "an over-long JPEG still fits in the image string bound")
+  const heavyDir = await scratchDir("paper-fetch-bound-bytes-")
+  const heavyShot = await fetchArtboard(
+    scriptedPaper({
+      cacheDir: heavyDir,
+      listResources: () => listPayload(true),
+      screenshot: () => shotPayload(heavy, null),
+    }),
+    ids(),
+  )
+  assert(
+    heavyShot.kind === "unavailable" && heavyShot.reason === "bad-image",
+    "decoded image bytes over the bound are bad-image",
+  )
+  assert(await jpegMissing(heavyDir), "decoded image bytes over the bound write no JPEG")
+  assert(await sidecarMissing(heavyDir), "decoded image bytes over the bound write no sidecar")
+
+  const atBytes = new Uint8Array(IMAGE_BYTES_MAX)
+  atBytes.set(jpeg)
+  const atBytesDir = await scratchDir("paper-fetch-bound-bytes-at-")
+  const atBytesShot = await fetchArtboard(
+    scriptedPaper({
+      cacheDir: atBytesDir,
+      listResources: () => listPayload(true),
+      screenshot: () => shotPayload(atBytes, null),
+    }),
+    ids(),
+  )
+  assert(atBytesShot.kind === "fresh", "decoded image bytes at the bound still store")
+  assert(atBytesShot.image.byteLength === IMAGE_BYTES_MAX, "the stored shot keeps the bounded byte length")
+
+  const overNote = "N".repeat(NOTE_MAX + 1)
+  const overNoteDir = await scratchDir("paper-fetch-bound-note-over-")
+  const overNoteShot = await fetchArtboard(
+    scriptedPaper({
+      cacheDir: overNoteDir,
+      listResources: () => listPayload(true),
+      screenshot: () => shotPayload(jpeg, overNote),
+    }),
+    ids(),
+  )
+  assert(overNoteShot.kind === "unavailable" && overNoteShot.reason === "bad-image", "an over-long note is bad-image")
+  assert(await sidecarMissing(overNoteDir), "an over-long note writes no sidecar")
+  assert(await jpegMissing(overNoteDir), "an over-long note writes no JPEG")
+
+  const atNoteDir = await scratchDir("paper-fetch-bound-note-at-")
+  const atNote = "N".repeat(NOTE_MAX)
+  const atNoteShot = await fetchArtboard(
+    scriptedPaper({
+      cacheDir: atNoteDir,
+      listResources: () => listPayload(true),
+      screenshot: () => shotPayload(jpeg, atNote),
+    }),
+    ids(),
+  )
+  assert(atNoteShot.kind === "fresh" && atNoteShot.image.note === atNote, "a note at the bound still stores")
+
+  const printedDir = await scratchDir("paper-fetch-bound-printed-")
+  const printedBody = Buffer.from(
+    `event: message\ndata: ${JSON.stringify({
+      jsonrpc: "2.0",
+      id: 3,
+      result: shotPayload(jpeg, overNote),
+    })}\n\n`,
+    "utf8",
+  )
+  const printedPaper = await shotServer({ kind: "body", status: 200, body: printedBody })
+  try {
+    const printed = await runShot(script, printedDir, printedPaper.url)
+    assert(printed.status === 2 && printed.stderr === "bad-image\n", "an over-long note fails the shot")
+    assert(!printed.stdout.includes(overNote), "an over-long note is not printed")
+    assert(await sidecarMissing(printedDir), "a printed over-long note writes no sidecar")
+  } finally {
+    await printedPaper.close()
   }
 }
 
