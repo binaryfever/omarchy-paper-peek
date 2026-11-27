@@ -40,6 +40,17 @@ const SHOT_SCALE = 2
 // own width, which is what Paper answers at 1.
 const MEASURE_SCALE = 1
 
+// One deadline for the POST and the body that follows it. The drawer will not
+// start the next status check, artboard watch, or shot while this process is
+// still running, so a reply that never ends used to keep that slot. Eight
+// seconds is four times the default open-drawer refresh (2000 ms) and under
+// the closed drawer's fifteen (30000 ms). A 2× shot is a JPEG Paper caps at
+// 2000 pixels on the long edge; the largest one measured is 285485 bytes, and
+// a helper that only lists resources takes 0.18 seconds, so eight seconds
+// leaves the rest for the render. A user's refresh interval does not move
+// this number.
+export const PAPER_REQUEST_DEADLINE_MS = 8000
+
 type PluginTool = (typeof PLUGIN_TOOLS)[number]
 
 export type FileId = string & { readonly [fileIdBrand]: true }
@@ -555,20 +566,22 @@ async function rpc(
     method,
     params,
   })
+  const signal = AbortSignal.timeout(PAPER_REQUEST_DEADLINE_MS)
   let response: Response
   try {
-    response = await fetch(backend.endpoint, { method: "POST", headers, body })
-  } catch {
+    response = await fetch(backend.endpoint, { method: "POST", headers, body, signal })
+    if (response.status !== 200) throw new Fail("paper-down")
+    const sessionId = response.headers.get("mcp-session-id")
+    if (sessionId !== null && sessionId.length > 0) backend.sessionId = sessionId
+    const text = await response.text()
+    const envelope = parseSse(text)
+    if (envelope instanceof Fail) throw envelope
+    if (envelope.error !== undefined) throw new Fail("bad-payload")
+    return envelope.result
+  } catch (err) {
+    if (err instanceof Fail) throw err
     throw new Fail("paper-down")
   }
-  if (response.status !== 200) throw new Fail("paper-down")
-  const sessionId = response.headers.get("mcp-session-id")
-  if (sessionId !== null && sessionId.length > 0) backend.sessionId = sessionId
-  const text = await response.text()
-  const envelope = parseSse(text)
-  if (envelope instanceof Fail) throw envelope
-  if (envelope.error !== undefined) throw new Fail("bad-payload")
-  return envelope.result
 }
 
 function parseSse(body: string): { readonly result: unknown; readonly error?: unknown } | Fail {

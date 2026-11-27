@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync, type ChildProcess } from "node:child_process"
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -13,6 +14,7 @@ import {
   parseNodeId,
   parsePageId,
   peekStatus,
+  PAPER_REQUEST_DEADLINE_MS,
   readArtboard,
   readProjects,
   reportStatus,
@@ -595,6 +597,7 @@ async function runTests(): Promise<void> {
     )
     await rm(watchDir, { recursive: true, force: true })
     await rm(blindDir, { recursive: true, force: true })
+    await deadlineTests(script, jpeg)
     await memoryTests()
   } finally {
     if (previousLog === undefined) delete process.env.PAPER_PEEK_LOG
@@ -899,6 +902,219 @@ async function memoryTests(): Promise<void> {
     else process.env.PAPER_PEEK_CACHE = previousCache
     await rm(stateDir, { recursive: true, force: true })
     await rm(cacheDir, { recursive: true, force: true })
+  }
+}
+
+type LocalPaper = {
+  readonly url: string
+  close(): Promise<void>
+}
+
+function sseReply(id: number, result: unknown): string {
+  return `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id, result })}\n\n`
+}
+
+async function readRequest(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const chunk of req) chunks.push(chunk as Buffer)
+  return Buffer.concat(chunks).toString("utf8")
+}
+
+function listen(server: ReturnType<typeof createServer>): Promise<LocalPaper> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address()
+      if (address === null || typeof address === "string") {
+        reject(new Error("test server has no port"))
+        return
+      }
+      resolve({
+        url: `http://127.0.0.1:${address.port}/mcp`,
+        close: () =>
+          new Promise((done) => {
+            server.closeAllConnections()
+            server.close(() => done())
+          }),
+      })
+    })
+  })
+}
+
+// Accepts the POST and then never finishes the body. Headers go out, a
+// partial SSE line follows, and res.end is never called.
+async function hangingBody(): Promise<LocalPaper> {
+  const server = createServer((req, res) => {
+    req.resume()
+    res.writeHead(200, { "Content-Type": "text/event-stream" })
+    res.write("event: message\ndata: ")
+  })
+  return listen(server)
+}
+
+// Accepts the POST and then sends nothing, so the deadline covers the post
+// itself and not only a body that has already started.
+async function hangingPost(): Promise<LocalPaper> {
+  const server = createServer((req) => {
+    req.resume()
+  })
+  return listen(server)
+}
+
+async function answeringPaper(jpeg: Uint8Array): Promise<LocalPaper> {
+  const server = createServer((req, res) => {
+    void answerPaper(req, res, jpeg)
+  })
+  return listen(server)
+}
+
+async function answerPaper(req: IncomingMessage, res: ServerResponse, jpeg: Uint8Array): Promise<void> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await readRequest(req)) as unknown
+  } catch {
+    res.writeHead(400)
+    res.end()
+    return
+  }
+  const id = typeof parsed === "object" && parsed !== null && "id" in parsed ? Number(parsed.id) : 1
+  const method =
+    typeof parsed === "object" && parsed !== null && "method" in parsed ? String(parsed.method) : ""
+  const params =
+    typeof parsed === "object" && parsed !== null && "params" in parsed ? parsed.params : undefined
+  const tool =
+    typeof params === "object" && params !== null && "name" in params ? String(params.name) : ""
+  let result: unknown = {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    serverInfo: { name: "paper-peek-test", version: "0" },
+  }
+  if (method === "tools/call" && tool === "list_resources") result = listPayload(true)
+  if (method === "tools/call" && tool === "get_screenshot") result = shotPayload(jpeg, null)
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Mcp-Session-Id": "paper-peek-test",
+  })
+  res.end(sseReply(id, result))
+}
+
+function runShot(
+  script: string,
+  cache: string,
+  url: string,
+): Promise<{ readonly status: number | null; readonly stdout: string; readonly stderr: string; readonly elapsed: number }> {
+  // spawnSync would block this process, and the local Paper stands in this
+  // process, so the helper's connection would sit unaccepted until the
+  // deadline. The child has to run while this server's event loop turns.
+  const started = Date.now()
+  const child: ChildProcess = spawn(script, ["shot", FILE, NODE], {
+    env: {
+      ...process.env,
+      PAPER_MCP_URL: url,
+      PAPER_PEEK_CACHE: cache,
+      PAPER_PEEK_LOG: join(cache, "refresh.log"),
+      PAPER_PEEK_SETTINGS: join(cache, "missing-settings.json"),
+    },
+  })
+  let stdout = ""
+  let stderr = ""
+  child.stdout?.setEncoding("utf8")
+  child.stderr?.setEncoding("utf8")
+  child.stdout?.on("data", (chunk: string) => {
+    stdout += chunk
+  })
+  child.stderr?.on("data", (chunk: string) => {
+    stderr += chunk
+  })
+  const timer = setTimeout(() => {
+    child.kill()
+  }, PAPER_REQUEST_DEADLINE_MS + 5000)
+  return new Promise((resolve) => {
+    child.on("close", (status) => {
+      clearTimeout(timer)
+      resolve({ status, stdout, stderr, elapsed: Date.now() - started })
+    })
+  })
+}
+
+function assertInsideDeadline(elapsed: number, label: string): void {
+  assert(
+    elapsed >= PAPER_REQUEST_DEADLINE_MS - 250 && elapsed < PAPER_REQUEST_DEADLINE_MS + 5000,
+    `${label} fails inside the deadline (elapsed ${elapsed} ms, deadline ${PAPER_REQUEST_DEADLINE_MS} ms)`,
+  )
+}
+
+async function deadlineTests(script: string, jpeg: Uint8Array): Promise<void> {
+  const freshCache = await scratchDir("paper-fetch-deadline-fresh-")
+  const paper = await answeringPaper(jpeg)
+  try {
+    const fresh = await runShot(script, freshCache, paper.url)
+    assert(fresh.status === 0, "a small reply exits 0")
+    const parsed = JSON.parse(fresh.stdout) as {
+      kind: string
+      image?: { width: number; height: number; imagePath: string }
+    }
+    assert(parsed.kind === "fresh", "a small well-formed reply returns a fresh shot")
+    assert(parsed.image?.width === 8 && parsed.image?.height === 6, "the fresh shot keeps the JPEG size")
+    const stored = await readFile(parsed.image!.imagePath)
+    assert(stored[0] === 0xff && stored[1] === 0xd8, "the fresh shot is the JPEG the server sent")
+    assert(fresh.elapsed < PAPER_REQUEST_DEADLINE_MS, "a small reply returns before the deadline")
+  } finally {
+    await paper.close()
+  }
+
+  const hungCache = await scratchDir("paper-fetch-deadline-hung-")
+  const body = await hangingBody()
+  try {
+    const hung = await runShot(script, hungCache, body.url)
+    assert(hung.status === 2 && hung.stderr === "paper-down\n", "a body that never ends is paper-down")
+    const parsed = JSON.parse(hung.stdout) as { kind: string; reason?: string }
+    assert(parsed.kind === "unavailable" && parsed.reason === "paper-down", "a hung body reports paper-down")
+    assertInsideDeadline(hung.elapsed, "a body that never ends")
+  } finally {
+    await body.close()
+  }
+
+  const post = await hangingPost()
+  try {
+    const hung = await runShot(script, hungCache, post.url)
+    assert(hung.status === 2 && hung.stderr === "paper-down\n", "a post that never answers is paper-down")
+    assertInsideDeadline(hung.elapsed, "a post that never answers")
+  } finally {
+    await post.close()
+  }
+
+  const seededCache = await scratchDir("paper-fetch-deadline-cached-")
+  const seed = await answeringPaper(jpeg)
+  let imagePath = ""
+  try {
+    const seeded = await runShot(script, seededCache, seed.url)
+    assert(seeded.status === 0, "seed a JPEG before the body hangs")
+    const parsed = JSON.parse(seeded.stdout) as { kind: string; image?: { imagePath: string } }
+    assert(parsed.kind === "fresh" && parsed.image !== undefined, "the seed is a fresh shot")
+    imagePath = parsed.image.imagePath
+  } finally {
+    await seed.close()
+  }
+  const before = await readFile(imagePath)
+  const again = await hangingBody()
+  try {
+    const kept = await runShot(script, seededCache, again.url)
+    assert(kept.status === 0, "a cached shot still exits 0 when the body hangs")
+    const parsed = JSON.parse(kept.stdout) as {
+      kind: string
+      reason?: string
+      image?: { imagePath: string }
+    }
+    assert(
+      parsed.kind === "cached" && parsed.reason === "paper-down" && parsed.image?.imagePath === imagePath,
+      "a hung body keeps the stored JPEG and says paper-down",
+    )
+    const after = await readFile(imagePath)
+    assert(Buffer.from(before).equals(Buffer.from(after)), "a hung body leaves the JPEG bytes in place")
+    assertInsideDeadline(kept.elapsed, "a cached shot with a hung body")
+  } finally {
+    await again.close()
   }
 }
 
