@@ -55,6 +55,15 @@ export const REPLY_BYTE_CAP = 2 * 1024 * 1024
 // this number.
 export const PAPER_REQUEST_DEADLINE_MS = 8000
 
+// The body cap bounds the socket. These bound the shot after the reply is
+// parsed, before the image is decoded or stored and before the note is
+// written or printed. The largest 2× JPEG measured is 285485 bytes, which is
+// 380648 base64 characters. The resize note Paper attaches is 58 characters.
+// See decision 034.
+export const IMAGE_DATA_MAX = 1536 * 1024
+export const IMAGE_BYTES_MAX = 1024 * 1024
+export const NOTE_MAX = 1024
+
 type PluginTool = (typeof PLUGIN_TOOLS)[number]
 
 export type FileId = string & { readonly [fileIdBrand]: true }
@@ -710,6 +719,7 @@ function jpegFromToolResult(raw: unknown): Frame | Fail {
     if (block.type !== "text") return new Fail("bad-payload")
   }
   if (imageCount !== 1) return new Fail("bad-image")
+  if (imageData.length > IMAGE_DATA_MAX) return new Fail("bad-image")
   let note: string | null = null
   for (let i = imageIndex + 1; i < raw.content.length; i++) {
     const block = raw.content[i]
@@ -718,7 +728,9 @@ function jpegFromToolResult(raw: unknown): Frame | Fail {
       break
     }
   }
+  if (note !== null && note.length > NOTE_MAX) return new Fail("bad-image")
   const bytes = Uint8Array.from(Buffer.from(imageData, "base64"))
+  if (bytes.byteLength > IMAGE_BYTES_MAX) return new Fail("bad-image")
   const size = jpegSize(bytes)
   if (size === null) return new Fail("bad-image")
   return { bytes, width: size.width, height: size.height, note }
