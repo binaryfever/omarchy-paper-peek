@@ -15,6 +15,7 @@ import {
   parsePageId,
   peekStatus,
   PAPER_REQUEST_DEADLINE_MS,
+  REPLY_BYTE_CAP,
   readArtboard,
   readProjects,
   reportStatus,
@@ -598,6 +599,7 @@ async function runTests(): Promise<void> {
     await rm(watchDir, { recursive: true, force: true })
     await rm(blindDir, { recursive: true, force: true })
     await deadlineTests(script, jpeg)
+    await cappedReplyTests(script)
     await memoryTests()
   } finally {
     if (previousLog === undefined) delete process.env.PAPER_PEEK_LOG
@@ -1115,6 +1117,204 @@ async function deadlineTests(script: string, jpeg: Uint8Array): Promise<void> {
     assertInsideDeadline(kept.elapsed, "a cached shot with a hung body")
   } finally {
     await again.close()
+  }
+}
+
+const TWO_X_JPEG_BYTES = 285485
+const TWO_X_REPLY_BYTES = 380853
+
+function twoXJpeg(): Uint8Array {
+  const padded = new Uint8Array(TWO_X_JPEG_BYTES)
+  padded.set(makeMinimalJpeg(2000, 1250))
+  return padded
+}
+
+function shotEnvelope(jpeg: Uint8Array, id: number): string {
+  const result = {
+    content: [
+      { type: "image", mimeType: "image/jpeg", data: Buffer.from(jpeg).toString("base64") },
+      { type: "text", text: "Note: Image was resized to 2000x1250px to fit size limits." },
+    ],
+  }
+  return `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id, result })}\n\n`
+}
+
+type ShotReply =
+  | { readonly kind: "body"; readonly status: number; readonly body: Buffer }
+  | { readonly kind: "flood" }
+
+async function shotServer(reply: ShotReply): Promise<{
+  readonly url: string
+  readonly written: () => number
+  readonly overflow: () => boolean
+  readonly close: () => Promise<void>
+}> {
+  let written = 0
+  let overflow = false
+  let stopped = false
+  const server = createServer((req, res) => {
+    void (async () => {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(await readRequest(req)) as unknown
+      } catch {
+        res.destroy()
+        return
+      }
+      const method =
+        typeof parsed === "object" && parsed !== null && "method" in parsed ? String(parsed.method) : ""
+      const params =
+        typeof parsed === "object" && parsed !== null && "params" in parsed ? parsed.params : undefined
+      const tool =
+        typeof params === "object" && params !== null && "name" in params ? String(params.name) : ""
+      const id = typeof parsed === "object" && parsed !== null && "id" in parsed ? Number(parsed.id) : 1
+      if (method === "tools/call" && tool === "get_screenshot") {
+        if (reply.kind === "flood") {
+          flood(res)
+          return
+        }
+        written += reply.body.length
+        res.writeHead(reply.status, {
+          "Content-Type": "text/event-stream",
+          "Content-Length": reply.body.length,
+          "Mcp-Session-Id": "paper-peek-test",
+        })
+        res.end(reply.body)
+        return
+      }
+      const result =
+        method === "tools/call" && tool === "list_resources"
+          ? listPayload(true)
+          : { protocolVersion: "2025-06-18", capabilities: {} }
+      const body = Buffer.from(sseReply(id, result), "utf8")
+      written += body.length
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Content-Length": body.length,
+        "Mcp-Session-Id": "paper-peek-test",
+      })
+      res.end(body)
+    })()
+  })
+
+  function flood(res: ServerResponse): void {
+    res.writeHead(500, { "Content-Type": "text/plain", Connection: "close" })
+    res.on("error", () => {
+      stopped = true
+    })
+    res.on("close", () => {
+      stopped = true
+    })
+    const chunk = Buffer.alloc(4096, 0x78)
+    const safety = REPLY_BYTE_CAP + 32 * 1024 * 1024
+    const pump = (): void => {
+      if (stopped) return
+      let ok = true
+      while (ok && !stopped && written < safety) {
+        try {
+          ok = res.write(chunk)
+        } catch {
+          stopped = true
+          return
+        }
+        written += chunk.length
+      }
+      if (written >= safety) {
+        overflow = true
+        stopped = true
+        return
+      }
+      if (!stopped) res.once("drain", pump)
+    }
+    pump()
+  }
+
+  const paper = await listen(server)
+  return {
+    url: paper.url,
+    written: () => written,
+    overflow: () => overflow,
+    close: () => paper.close(),
+  }
+}
+
+async function jpegMissing(cacheDir: string): Promise<boolean> {
+  try {
+    await readFile(join(cacheDir, "shots", FILE, `${NODE}.jpg`))
+    return false
+  } catch {
+    return true
+  }
+}
+
+async function cappedReplyTests(script: string): Promise<void> {
+  const twoXBody = shotEnvelope(twoXJpeg(), 3)
+  assert(
+    Buffer.byteLength(twoXBody) === TWO_X_REPLY_BYTES,
+    "the wrapped 2x shot stays the size the decision records",
+  )
+  assert(TWO_X_REPLY_BYTES < REPLY_BYTE_CAP, "a real 2x shot sits under the cap")
+  assert(TWO_X_REPLY_BYTES > 261602, "the wrapped 2x shot is larger than the largest saved 1x reply")
+
+  const valid = Buffer.from(shotEnvelope(makeMinimalJpeg(8, 6), 3), "utf8")
+  const over = Buffer.alloc(REPLY_BYTE_CAP + 1, 0x20)
+  over.set(valid)
+  const overDir = await scratchDir("paper-fetch-over-cap-")
+  const overPaper = await shotServer({ kind: "body", status: 200, body: over })
+  try {
+    const result = await runShot(script, overDir, overPaper.url)
+    assert(result.status === 2 && result.stderr === "paper-down\n", "a body one byte over the cap fails")
+    const parsed = JSON.parse(result.stdout) as { kind: string }
+    assert(parsed.kind === "unavailable", "a body one byte over the cap does not return a shot")
+    assert(await jpegMissing(overDir), "a body one byte over the cap writes no JPEG")
+  } finally {
+    await overPaper.close()
+  }
+
+  const twoXDir = await scratchDir("paper-fetch-twox-")
+  const twoXPaper = await shotServer({ kind: "body", status: 200, body: Buffer.from(twoXBody, "utf8") })
+  try {
+    const result = await runShot(script, twoXDir, twoXPaper.url)
+    assert(result.status === 0, "a real 2x shot under the cap succeeds")
+    const parsed = JSON.parse(result.stdout) as {
+      kind: string
+      image: { width: number; height: number; byteLength: number }
+    }
+    assert(parsed.kind === "fresh", "a body the size of a real 2x shot returns a fresh shot")
+    assert(parsed.image.width === 2000 && parsed.image.height === 1250, "the fresh shot keeps the measured frame")
+    assert(parsed.image.byteLength === TWO_X_JPEG_BYTES, "the fresh shot keeps the measured byte size")
+  } finally {
+    await twoXPaper.close()
+  }
+
+  const smallDir = await scratchDir("paper-fetch-small-down-")
+  const smallPaper = await shotServer({ kind: "body", status: 500, body: Buffer.from("nope") })
+  try {
+    const result = await runShot(script, smallDir, smallPaper.url)
+    assert(result.status === 2 && result.stderr === "paper-down\n", "a non-200 whose body is under the cap is paper-down")
+    assert(await jpegMissing(smallDir), "a small non-200 writes no JPEG")
+  } finally {
+    await smallPaper.close()
+  }
+
+  const floodDir = await scratchDir("paper-fetch-flood-")
+  const floodPaper = await shotServer({ kind: "flood" })
+  try {
+    const started = Date.now()
+    const result = await runShot(script, floodDir, floodPaper.url)
+    const elapsed = Date.now() - started
+    assert(result.status === 2 && result.stderr === "paper-down\n", "a non-200 whose body is over the cap fails")
+    assert(elapsed < 5000, "an open error body stops at the cap rather than the deadline")
+    assert(floodPaper.written() > REPLY_BYTE_CAP, "the open error body is read past the cap")
+    // The socket can already be holding the next chunks when the cap trips.
+    assert(
+      floodPaper.written() < REPLY_BYTE_CAP + 12 * 1024 * 1024,
+      "a non-200 whose body is over the cap stops at the cap",
+    )
+    assert(!floodPaper.overflow(), "the open error body is not read up to the safety limit")
+    assert(await jpegMissing(floodDir), "an open error body writes no JPEG")
+  } finally {
+    await floodPaper.close()
   }
 }
 
