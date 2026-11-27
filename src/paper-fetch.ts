@@ -39,6 +39,10 @@ const SHOT_SCALE = 2
 // The width-measuring call is a different question: it wants the artboard's
 // own width, which is what Paper answers at 1.
 const MEASURE_SCALE = 1
+// A reply is one string before it is parsed. This is the most bytes that
+// string may hold, including a non-200. The read stops when the next byte
+// would pass it, and that reply fails before parseSse. See decision 033.
+export const REPLY_BYTE_CAP = 2 * 1024 * 1024
 
 // One deadline for the POST and the body that follows it. The drawer will not
 // start the next status check, artboard watch, or shot while this process is
@@ -570,10 +574,10 @@ async function rpc(
   let response: Response
   try {
     response = await fetch(backend.endpoint, { method: "POST", headers, body, signal })
-    if (response.status !== 200) throw new Fail("paper-down")
     const sessionId = response.headers.get("mcp-session-id")
     if (sessionId !== null && sessionId.length > 0) backend.sessionId = sessionId
-    const text = await response.text()
+    const text = await readCappedBody(response, REPLY_BYTE_CAP)
+    if (response.status !== 200) throw new Fail("paper-down")
     const envelope = parseSse(text)
     if (envelope instanceof Fail) throw envelope
     if (envelope.error !== undefined) throw new Fail("bad-payload")
@@ -582,6 +586,42 @@ async function rpc(
     if (err instanceof Fail) throw err
     throw new Fail("paper-down")
   }
+}
+
+async function readCappedBody(response: Response, cap: number): Promise<string> {
+  const stream = response.body
+  if (stream === null) return ""
+  const reader = stream.getReader()
+  const parts: Uint8Array[] = []
+  let total = 0
+  let released = false
+  try {
+    for (;;) {
+      const step = await reader.read()
+      if (step.done) break
+      const chunk = step.value
+      if (total + chunk.byteLength > cap) {
+        released = true
+        try {
+          await reader.cancel()
+        } catch {
+          // The socket is already gone. The cap still stands.
+        }
+        throw new Fail("paper-down")
+      }
+      parts.push(chunk)
+      total += chunk.byteLength
+    }
+  } finally {
+    if (!released) {
+      try {
+        reader.releaseLock()
+      } catch {
+        // The deadline already released the reader.
+      }
+    }
+  }
+  return Buffer.concat(parts).toString("utf8")
 }
 
 function parseSse(body: string): { readonly result: unknown; readonly error?: unknown } | Fail {
